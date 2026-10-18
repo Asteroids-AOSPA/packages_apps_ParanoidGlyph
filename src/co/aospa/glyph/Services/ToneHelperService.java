@@ -187,8 +187,8 @@ public class ToneHelperService extends Service {
     private void tryAnimationData(String key, String value, boolean shouldNotify) {
         OGGParser parser;
         Uri soundUri = Uri.parse(value);
-        try {
-            InputStream inputStream = resolver.openInputStream(soundUri);
+        try (InputStream inputStream = resolver.openInputStream(soundUri)) {
+            if (inputStream == null) return;
             parser = new OGGParser(inputStream);
         } catch (FileNotFoundException e) {
             Log.w(TAG, "Ogg file not found!");
