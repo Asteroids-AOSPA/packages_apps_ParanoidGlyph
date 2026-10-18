@@ -21,6 +21,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.os.FileObserver;
 import android.os.IBinder;
+import android.text.TextUtils;
 import android.util.Log;
 
 import co.aospa.glyph.Manager.AnimationManager;
@@ -32,10 +33,8 @@ public class PowershareService extends Service {
     private static final String TAG = "GlyphPowershareService";
     private static final boolean DEBUG = true;
 
-    private static final String POWERSHARE_ACTIVE =
-            ResourceUtils.getString("glyph_settings_paths_powershare_active_absolute");
-    private static final String POWERSHARE_ENABLED =
-            ResourceUtils.getString("glyph_settings_paths_powershare_enabled_absolute");
+    private String POWERSHARE_ACTIVE = null;
+    private String POWERSHARE_ENABLED = null;
 
     private PowershareActiveObserver mPowershareActiveObserver;
     private Context mContext;
@@ -50,9 +49,27 @@ public class PowershareService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (DEBUG) Log.d(TAG, "Starting service");
-        mFileObserver.startWatching();
-        mPowershareActiveObserver.startWatching();
+        getPaths();
+        if (TextUtils.isEmpty(POWERSHARE_ACTIVE) || TextUtils.isEmpty(POWERSHARE_ENABLED)) {
+            Log.w(TAG, "Unable to get one or more powershare paths. device is unsupported?");
+            stopSelf();
+            return START_NOT_STICKY;
+        } else {
+            mFileObserver.startWatching();
+            mPowershareActiveObserver.startWatching();
+        }
         return START_STICKY;
+    }
+
+    private void getPaths() {
+        try {
+            POWERSHARE_ACTIVE =
+                ResourceUtils.getString("glyph_settings_paths_powershare_active_absolute");
+        } catch (Exception ignored) { }
+        try {
+            POWERSHARE_ENABLED =
+                ResourceUtils.getString("glyph_settings_paths_powershare_enabled_absolute");
+        } catch (Exception ignored) { }
     }
 
     @Override
