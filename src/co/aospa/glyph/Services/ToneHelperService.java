@@ -20,9 +20,14 @@ import java.io.FileNotFoundException;
 import java.io.InputStream;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
+import co.aospa.glyph.Constants.Constants;
+import co.aospa.glyph.Manager.AnimationManager;
 import co.aospa.glyph.Manager.SettingsManager;
 import co.aospa.glyph.Utils.AnimationUtils;
+import co.aospa.glyph.Utils.AudioGlyphGenerator;
 import co.aospa.glyph.Utils.OGGParser;
 
 import co.aospa.glyph.R;
@@ -42,16 +47,20 @@ public class ToneHelperService extends Service {
     private static final String INTENT_EXTRA_KEY = "changed_key";
     private static final String INTENT_EXTRA_VALUE = "changed_value";
 
-
     private static final String CHANNEL_ID = "tone_changes";
 
     // Keep a map of URI -> key so we can reverse-look it up in onChange
     private final Map<Uri, String> observedUris = new LinkedHashMap<>();
 
+    private final ExecutorService mExecutor = Executors.newSingleThreadExecutor();
+
     private final String TAG = this.getClass().getSimpleName();
 
     @Override
     public void onCreate() {
+        if (Constants.CONTEXT == null) {
+            Constants.CONTEXT = getApplicationContext();
+        }
         resolver = getContentResolver();
         notificationUri = Settings.System.getUriFor(Settings.System.NOTIFICATION_SOUND);
         ringtoneUri = Settings.System.getUriFor(Settings.System.RINGTONE);
@@ -63,31 +72,37 @@ public class ToneHelperService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
 
-        //saveRing = SettingsManager.isGlyphRingtoneSyncEnabled();
-
+        saveRing = SettingsManager.isGlyphRingtoneSyncEnabled();
         saveNotif = SettingsManager.isGlyphNotifsSyncEnabled();
+
+        if (saveRing) {
+            String key = Settings.System.RINGTONE;
+            String val = Settings.System.getString(resolver, key);
+            if (val != null) {
+                mExecutor.submit(() -> handleSettingChange(key, val, false));
+            }
+        } else {
+            AnimationUtils.Holder.Call.clear();
+        }
 
         if (saveNotif) {
             String key = Settings.System.NOTIFICATION_SOUND;
-            handleSettingChange(key, Settings.System.getString(resolver, key), false);
+            String val = Settings.System.getString(resolver, key);
+            if (val != null) {
+                mExecutor.submit(() -> handleSettingChange(key, val, false));
+            }
         } else {
             AnimationUtils.Holder.Notification.clear();
         }
 
-//        if (saveRing) {
-//            String key = Settings.System.RINGTONE;
-//            handleSettingChange(key, Settings.System.getString(resolver, key), false);
-//        } else {
-//            AnimationUtils.Holder.Call.clear();
-//        }
         return START_STICKY;
     }
 
     private void registerObserver() {
 
         observedUris.put(notificationUri, Settings.System.NOTIFICATION_SOUND);
-//        observedUris.put(ringtoneUri, Settings.System.RINGTONE);
-//        observedUris.put(ringtone2Uri, Settings.System.RINGTONE + "2");
+        observedUris.put(ringtoneUri, Settings.System.RINGTONE);
+        observedUris.put(ringtone2Uri, Settings.System.RINGTONE + "2");
 
         settingsObserver = new ContentObserver(new Handler(Looper.getMainLooper())) {
             @Override
@@ -98,7 +113,7 @@ public class ToneHelperService extends Service {
                 String value = Settings.System.getString(resolver, key);
                 if (value == null) return;
 
-                handleSettingChange(key, value, true);
+                mExecutor.submit(() -> handleSettingChange(key, value, true));
             }
         };
 
@@ -108,21 +123,40 @@ public class ToneHelperService extends Service {
     }
 
     private void handleSettingChange(String key, String value, boolean shouldNotify) {
+        saveRing = SettingsManager.isGlyphRingtoneSyncEnabled();
+        saveNotif = SettingsManager.isGlyphNotifsSyncEnabled();
         boolean isOgg = false;
-            try {
-                String mimeType = resolver.getType(Uri.parse(value));
-                isOgg = "audio/ogg".equals(mimeType)
-                        || "audio/x-ogg".equals(mimeType)
-                        || "application/ogg".equals(mimeType);
-            } catch (Exception e) {
-                Log.w(TAG, "Could not resolve MIME type for: " + value, e);
+        try {
+            Uri uri = Uri.parse(value);
+            String mimeType = resolver.getType(uri);
+            if ("audio/ogg".equals(mimeType)
+                    || "audio/x-ogg".equals(mimeType)
+                    || "application/ogg".equals(mimeType)
+                    || "audio/opus".equals(mimeType)) {
+                isOgg = true;
+            } else if (value.toLowerCase().endsWith(".ogg") || value.toLowerCase().endsWith(".opus")) {
+                isOgg = true;
+            } else {
+                try (InputStream is = resolver.openInputStream(uri)) {
+                    byte[] magic = new byte[4];
+                    if (is != null && is.read(magic) == 4) {
+                        isOgg = (magic[0] == 'O' && magic[1] == 'g' && magic[2] == 'g' && magic[3] == 'S');
+                    }
+                }
             }
+        } catch (Exception e) {
+            Log.w(TAG, "Could not resolve MIME type or header for: " + value, e);
+        }
 
-        if (!isOgg) return;
+        if (!isOgg) {
+            Log.d(TAG, key + " changed to non-OGG audio (" + value + "), attempting fallback auto-generation");
+            autoGenerateFallback(key, Uri.parse(value), value, shouldNotify);
+            return;
+        }
 
         Log.d(TAG, key + " changed to OGG: " + value);
 
-       tryAnimationData(key, value, shouldNotify);
+        tryAnimationData(key, value, shouldNotify);
     }
 
     private void createNotificationChannel() {
@@ -138,6 +172,7 @@ public class ToneHelperService extends Service {
     @Override
     public void onDestroy() {
         super.onDestroy();
+        mExecutor.shutdown();
         if (settingsObserver != null) {
             getContentResolver().unregisterContentObserver(settingsObserver);
         }
@@ -156,13 +191,13 @@ public class ToneHelperService extends Service {
         String message = getString(R.string.sound_changed_notification_message);
 
         switch (key) {
-//            case Settings.System.RINGTONE -> {
-//                title = getString(R.string.ringtone_changed_notification_title);
-//            }
-//            case Settings.System.RINGTONE + "2" -> {
-//                title = getString(R.string.ringtone_changed_notification_title)
-//                        + " (SIM 2)";
-//            }
+            case Settings.System.RINGTONE -> {
+                title = getString(R.string.ringtone_changed_notification_title);
+            }
+            case Settings.System.RINGTONE + "2" -> {
+                title = getString(R.string.ringtone_changed_notification_title)
+                        + " (SIM 2)";
+            }
             case Settings.System.NOTIFICATION_SOUND -> {
                 title = getString(R.string.notification_sound_changed_notification_title);
             }
@@ -184,71 +219,122 @@ public class ToneHelperService extends Service {
 
     }
 
-    private void tryAnimationData(String key, String value, boolean shouldNotify) {
-        OGGParser parser;
-        Uri soundUri = Uri.parse(value);
-        try (InputStream inputStream = resolver.openInputStream(soundUri)) {
-            if (inputStream == null) return;
-            parser = new OGGParser(inputStream);
-        } catch (FileNotFoundException e) {
-            Log.w(TAG, "Ogg file not found!");
-            return;
-        } catch (Exception e) {
-            Log.w(TAG, "Unable to obtain animation data from OGG file.");
-            switch (key) {
-//                case Settings.System.RINGTONE -> {
-//                    AnimationUtils.Holder.Call.clear();
-//                }
-                case Settings.System.NOTIFICATION_SOUND -> {
-                    AnimationUtils.Holder.Notification.clear();
-                }
+    private void clearHolder(String key) {
+        switch (key) {
+            case Settings.System.RINGTONE, Settings.System.RINGTONE + "2" -> {
+                AnimationUtils.Holder.Call.clear();
             }
+            case Settings.System.NOTIFICATION_SOUND -> {
+                AnimationUtils.Holder.Notification.clear();
+            }
+        }
+    }
+
+    private void autoGenerateFallback(String key, Uri soundUri, String value, boolean shouldNotify) {
+        if (!Constants.Device.isPhone3a()) {
+            clearHolder(key);
             return;
         }
-        String animationData;
+
+        boolean isRing = key.equals(Settings.System.RINGTONE) || key.equals(Settings.System.RINGTONE + "2");
+        if (isRing && !saveRing) {
+            clearHolder(key);
+            return;
+        }
+        if (!isRing && !saveNotif) {
+            clearHolder(key);
+            return;
+        }
+
+        String lastUriKey = isRing ? "glyph_last_gen_ring_uri" : "glyph_last_gen_notif_uri";
+        String lastUri = PreferenceManager.getDefaultSharedPreferences(this).getString(lastUriKey, null);
+        if (soundUri.toString().equals(lastUri)) {
+            if (isRing && AnimationUtils.Holder.Call.isAvailable()) {
+                Log.d(TAG, "Phone (3a) auto-generated call animation already cached for " + value);
+                return;
+            } else if (!isRing && AnimationUtils.Holder.Notification.isAvailable()) {
+                Log.d(TAG, "Phone (3a) auto-generated notif animation already cached for " + value);
+                return;
+            }
+        }
+
+        Log.d(TAG, "Attempting Phone (3a) auto-generation for " + key + ": " + value);
+        try {
+            int mode = isRing ? AudioGlyphGenerator.MODE_SMOOTH : AudioGlyphGenerator.MODE_BEATS;
+            String generatedCsv = AudioGlyphGenerator.generateForPhone3a(this, soundUri, mode);
+            if (generatedCsv != null && !generatedCsv.isEmpty()) {
+                if (isRing) {
+                    AnimationUtils.Holder.Call.setCsv(generatedCsv, true);
+                    AnimationManager.clearCallAnimationCache();
+                } else {
+                    AnimationUtils.Holder.Notification.setCsv(generatedCsv, true);
+                }
+                PreferenceManager.getDefaultSharedPreferences(this).edit().putString(lastUriKey, soundUri.toString()).apply();
+                if (shouldNotify) notifyUser(key, value);
+                Log.d(TAG, "Phone (3a) animation auto-generated & saved successfully for " + key);
+                return;
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Auto-generation failed for " + key + ": " + e.getMessage());
+        }
+
+        clearHolder(key);
+    }
+
+    private void tryAnimationData(String key, String value, boolean shouldNotify) {
+        OGGParser parser = null;
+        Uri soundUri = Uri.parse(value);
+        try (InputStream inputStream = resolver.openInputStream(soundUri)) {
+            if (inputStream == null) {
+                clearHolder(key);
+                return;
+            }
+            parser = new OGGParser(inputStream);
+        } catch (FileNotFoundException e) {
+            Log.w(TAG, "Audio file not found: " + value);
+            clearHolder(key);
+            return;
+        } catch (Exception e) {
+            Log.d(TAG, "Non-OGG or non-standard file: " + e.getMessage() + "; falling back to auto-generator");
+            autoGenerateFallback(key, soundUri, value, shouldNotify);
+            return;
+        }
+
+        String animationData = null;
         try {
             animationData = parser.getAnimation();
         } catch (Exception e) {
             animationData = null;
         }
-        if (animationData != null && !animationData.isEmpty()) {
-            Log.d(TAG,"Animation data found!");
-            boolean compatible = AnimationUtils.isCompatible(animationData);
-            if (!compatible) {
-                Log.w(TAG, "Animation is not compatible with this device!");
-                switch (key) {
-//                    case Settings.System.RINGTONE -> {
-//                        AnimationUtils.Holder.Call.clear();
-//                    }
-                    case Settings.System.NOTIFICATION_SOUND -> {
-                        AnimationUtils.Holder.Notification.clear();
+
+        if (animationData != null && !animationData.isEmpty() && AnimationUtils.isCompatible(animationData)) {
+            Log.d(TAG, "Embedded compatible animation data found!");
+            switch (key) {
+                case Settings.System.RINGTONE, Settings.System.RINGTONE + "2" -> {
+                    if (saveRing) {
+                        if (AnimationUtils.Holder.Call.isAvailable()
+                                && AnimationUtils.Holder.Call.getCsv() != null
+                                && AnimationUtils.Holder.Call.getCsv().equals(animationData)) {
+                            return;
+                        }
+                        AnimationUtils.Holder.Call.setCsv(animationData, true);
+                        if (shouldNotify) notifyUser(key, value);
                     }
                 }
-                return;
-            }
-
-            switch (key) {
-//                case Settings.System.RINGTONE -> {
-//                    if (saveRing) {
-//                        if (AnimationUtils.Holder.Call.isAvailable()
-//                                && AnimationUtils.Holder.Call.getCsv().equals(animationData)) {
-//                            return;
-//                        }
-//                        AnimationUtils.Holder.Call.setCsv(animationData);
-//                        if (shouldNotify) notifyUser(key, value);
-//                    }
-//                }
                 case Settings.System.NOTIFICATION_SOUND -> {
                     if (saveNotif) {
                         if (AnimationUtils.Holder.Notification.isAvailable()
+                                && AnimationUtils.Holder.Notification.getCsv() != null
                                 && AnimationUtils.Holder.Notification.getCsv().equals(animationData)) {
                             return;
                         }
-                        AnimationUtils.Holder.Notification.setCsv(animationData);
+                        AnimationUtils.Holder.Notification.setCsv(animationData, true);
                         if (shouldNotify) notifyUser(key, value);
                     }
                 }
             }
+        } else {
+            autoGenerateFallback(key, soundUri, value, shouldNotify);
         }
     }
 

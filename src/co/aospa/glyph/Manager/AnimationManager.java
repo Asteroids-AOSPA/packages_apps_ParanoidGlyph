@@ -39,6 +39,10 @@ import co.aospa.glyph.Constants.Constants;
 import co.aospa.glyph.Utils.AnimationUtils;
 import co.aospa.glyph.Utils.FileUtils;
 import co.aospa.glyph.Utils.ResourceUtils;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public final class AnimationManager {
 
@@ -46,30 +50,62 @@ public final class AnimationManager {
     private static final boolean DEBUG = true;
     private static PowerManager.WakeLock sWakeLock;
 
+    private static final Map<String, int[][]> sCallFramesCache = new ConcurrentHashMap<>();
+
+    private static int[] sZoneDefs = null;
+    private static int sVolumeSize = -1;
+    private static int sBatterySize = -1;
+    private static int[] sSupportedLengths = null;
+    private static Set<Integer> sMatchedLengths = null;
+
+    public static void clearCallAnimationCache() {
+        sCallFramesCache.clear();
+    }
+
+    private static final ExecutorService sExecutor = Executors.newSingleThreadExecutor();
+    public static final long FRAME_INTERVAL_NANOS = 16_666_667L; // 60 FPS (~16.666 ms)
+
     private static void acquireWakeLock(Context context) {
-        if (sWakeLock == null) {
+        if (sWakeLock == null && context != null) {
             PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
-            sWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, TAG);
-            sWakeLock.acquire();
-            if (DEBUG) Log.d(TAG, "Acquired wakelock");
+            if (pm != null) {
+                sWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, TAG);
+                sWakeLock.acquire(45000); // 45s safety timeout
+                if (DEBUG) Log.d(TAG, "Acquired wakelock with 45s safety timeout");
+            }
         }
     }
 
     private static void releaseWakeLock() {
         if (sWakeLock != null) {
-            sWakeLock.release();
+            if (sWakeLock.isHeld()) {
+                sWakeLock.release();
+            }
             sWakeLock = null;
             if (DEBUG) Log.d(TAG, "Released wakelock");
         }
     }
 
-    private static Future<?> submit(Runnable runnable) {
-        ExecutorService executorService = Executors.newSingleThreadExecutor();
-        return executorService.submit(runnable);
+    public static Future<?> submit(Runnable runnable) {
+        return sExecutor.submit(runnable);
+    }
+
+    private static void sleepRemaining(long targetNanoTime) throws InterruptedException {
+        long sleepNanos = targetNanoTime - System.nanoTime();
+        if (sleepNanos > 0) {
+            long sleepMs = sleepNanos / 1_000_000L;
+            int sleepNs = (int) (sleepNanos % 1_000_000L);
+            Thread.sleep(sleepMs, sleepNs);
+        }
     }
 
     private static boolean check(String name, boolean wait) {
         if (DEBUG) Log.d(TAG, "Playing animation | name: " + name + " | waiting: " + Boolean.toString(wait));
+
+        if (StatusManager.isBatterySavingActive()) {
+            if (DEBUG) Log.d(TAG, "Battery saving is active, exiting animation | name: " + name);
+            return false;
+        }
 
         if (StatusManager.isAllLedActive()) {
             if (DEBUG) Log.d(TAG, "All LEDs are active, exiting animation | name: " + name);
@@ -87,6 +123,11 @@ public final class AnimationManager {
                 if (DEBUG) Log.d(TAG, "There is already an animation playing, wait | name: " + name);
                 while (StatusManager.isAnimationActive()) {
                     if (System.currentTimeMillis() - start >= 2500) return false;
+                    try {
+                        Thread.sleep(15);
+                    } catch (InterruptedException e) {
+                        return false;
+                    }
                 }
             } else {
                 if (DEBUG) Log.d(TAG, "There is already an animation playing, exiting | name: " + name);
@@ -99,6 +140,7 @@ public final class AnimationManager {
 
     private static boolean checkInterruption(String name) {
         return StatusManager.isAllLedActive()
+                || StatusManager.isBatterySavingActive()
                 || (!Objects.equals(name, "call") && StatusManager.isCallLedEnabled())
                 || (Objects.equals(name, "call") && !StatusManager.isCallLedEnabled())
                 || (Objects.equals(name, "progress") && StatusManager.isVolumeAnimationActive());
@@ -114,17 +156,23 @@ public final class AnimationManager {
         BufferedReader reader = new BufferedReader(new StringReader(csv));
         try {
             Iterator<String> it = AnimationUtils.iterateCsvLines(reader, false, false);
+            long targetTime = System.nanoTime();
             while (it.hasNext()) {
                 if (checkInterruption("csv")) throw new InterruptedException();
-                String[] pattern = it.next().split(",");
+                String line = it.next();
+                String[] pattern = line.split(",");
                 if (ArrayUtils.contains(Constants.getSupportedAnimationPatternLengths(), pattern.length)) {
                     updateLedFrame(pattern);
                 } else {
                     if (DEBUG)
-                        Log.d(TAG, "Animation line length mismatch | name: " + name + " | line: " + it.next());
+                        Log.d(TAG, "Animation line length mismatch | name: " + name + " | line: " + line);
                     throw new InterruptedException();
                 }
-                Thread.sleep(16, 666000);
+                targetTime += FRAME_INTERVAL_NANOS;
+                sleepRemaining(targetTime);
+                if (System.nanoTime() - targetTime > FRAME_INTERVAL_NANOS) {
+                    targetTime = System.nanoTime();
+                }
             }
         } catch (Exception e) {
             if (DEBUG)
@@ -137,12 +185,51 @@ public final class AnimationManager {
         }
     }
 
+    public static void playNotificationSynced(int[][] frames) {
+        if (frames == null || frames.length == 0) return;
+
+        if (!check("notification: synced", false))
+            return;
+
+        acquireWakeLock(Constants.CONTEXT);
+        StatusManager.setAnimationActive(true);
+
+        try {
+            final int len = frames.length;
+            final int[] supportedLengths = Constants.getSupportedAnimationPatternLengths();
+            long targetTime = System.nanoTime();
+            for (int i = 0; i < len; i++) {
+                if (checkInterruption("csv")) throw new InterruptedException();
+                int[] pattern = frames[i];
+                if (ArrayUtils.contains(supportedLengths, pattern.length)) {
+                    updateLedFrame(pattern);
+                }
+                targetTime += FRAME_INTERVAL_NANOS;
+                sleepRemaining(targetTime);
+                if (System.nanoTime() - targetTime > FRAME_INTERVAL_NANOS) {
+                    targetTime = System.nanoTime();
+                }
+            }
+        } catch (Exception e) {
+            if (DEBUG) Log.d(TAG, "Exception while playing synced notification animation: " + e);
+        } finally {
+            clearLEDs();
+            StatusManager.setAnimationActive(false);
+            if (DEBUG) Log.d(TAG, "Done playing synced notification animation");
+            releaseWakeLock();
+        }
+    }
+
     public static void playCsv(Context context, String name) {
         playCsv(context, name, false, false);
     }
 
     public static void playCsvAlternate(Context context, String name) {
         playCsv(context, name, false, false, true);
+    }
+
+    public static void playCsvAlternate(Context context, String name, boolean wait) {
+        playCsv(context, name, wait, false, true);
     }
 
     public static void playCsv(Context context, String name, boolean wait) {
@@ -173,16 +260,22 @@ public final class AnimationManager {
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(
                 ResourceUtils.getAnimation(name)))) {
             Iterator<String> it = AnimationUtils.iterateCsvLines(reader, reverse, shouldAlternate);
+            long targetTime = System.nanoTime();
             while (it.hasNext()) {
                 if (checkInterruption("csv")) throw new InterruptedException();
-                String[] pattern = it.next().split(",");
+                String line = it.next();
+                String[] pattern = line.split(",");
                 if (ArrayUtils.contains(Constants.getSupportedAnimationPatternLengths(), pattern.length)) {
                     updateLedFrame(pattern);
                 } else {
-                    if (DEBUG) Log.d(TAG, "Animation line length mismatch | name: " + name + " | line: " + it.next());
+                    if (DEBUG) Log.d(TAG, "Animation line length mismatch | name: " + name + " | line: " + line);
                     throw new InterruptedException();
                 }
-                Thread.sleep(16, 666000);
+                targetTime += FRAME_INTERVAL_NANOS;
+                sleepRemaining(targetTime);
+                if (System.nanoTime() - targetTime > FRAME_INTERVAL_NANOS) {
+                    targetTime = System.nanoTime();
+                }
             }
         } catch (Exception e) {
             if (DEBUG) Log.d(TAG, "Exception while playing animation | name: " + name + " | exception: " + e);
@@ -198,10 +291,19 @@ public final class AnimationManager {
         if (!check("charging", wait))
             return;
 
+        acquireWakeLock(Constants.CONTEXT);
+
         StatusManager.setAnimationActive(true);
         StatusManager.setChargingAnimationActive(true);
 
         int[] batteryArray = StatusManager.getBatteryArray();
+        if (batteryArray == null || batteryArray.length == 0) {
+            StatusManager.setChargingAnimationActive(false);
+            StatusManager.setAnimationActive(false);
+            releaseWakeLock();
+            return;
+        }
+
         int amount = (int) Math.floor((batteryLevel / 100D) * batteryArray.length);
         int last = StatusManager.getChargingLedLast();
         int next = amount - 1;
@@ -235,6 +337,7 @@ public final class AnimationManager {
             StatusManager.setAnimationActive(false);
             StatusManager.setBatteryArray(batteryArray);
             if (DEBUG) Log.d(TAG, "Done playing animation | name: charging");
+            releaseWakeLock();
         }
     }
 
@@ -242,11 +345,17 @@ public final class AnimationManager {
         int[] emptyArray = new int[ResourceUtils.getInteger("glyph_settings_battery_levels_num")];
         int[] batteryArray = StatusManager.getBatteryArray();
 
-        if (Arrays.equals(emptyArray, batteryArray))
+        if (batteryArray == null || Arrays.equals(emptyArray, batteryArray)) {
+            StatusManager.setChargingAnimationActive(false);
             return;
+        }
 
-        if (!check("Dismiss charging", false))
+        if (!check("Dismiss charging", false)) {
+            StatusManager.setChargingAnimationActive(false);
             return;
+        }
+
+        acquireWakeLock(Constants.CONTEXT);
 
         StatusManager.setAnimationActive(true);
 
@@ -270,6 +379,7 @@ public final class AnimationManager {
             StatusManager.setChargingAnimationActive(false);
             StatusManager.setAnimationActive(false);
             if (DEBUG) Log.d(TAG, "Done playing animation | name: Dismiss charging");
+            releaseWakeLock();
         }
     }
 
@@ -285,6 +395,9 @@ public final class AnimationManager {
         int[] volumeArray = StatusManager.getVolumeArray();
         if (volumeArray == null) {
             if (DEBUG) Log.d(TAG, "Volume array is null, cannot play animation");
+            StatusManager.setAnimationActive(false);
+            StatusManager.setVolumeAnimationActive(false);
+            releaseWakeLock();
             return;
         }
 
@@ -329,13 +442,15 @@ public final class AnimationManager {
         int[] emptyArray = new int[ResourceUtils.getInteger("glyph_settings_volume_levels_num")];
         int[] volumeArray = StatusManager.getVolumeArray();
 
-        if (Arrays.equals(emptyArray, volumeArray)) {
+        if (volumeArray == null || Arrays.equals(emptyArray, volumeArray)) {
             StatusManager.setVolumeAnimationActive(false);
             return;
         }
 
-        if (!check("Dismiss volume", false))
+        if (!check("Dismiss volume", false)) {
+            StatusManager.setVolumeAnimationActive(false);
             return;
+        }
 
         acquireWakeLock(context);
 
@@ -367,32 +482,137 @@ public final class AnimationManager {
     public static void playCall(String name, boolean reversed) {
         StatusManager.setCallLedEnabled(true);
 
-        if (!check("call: " + name, true))
+        if (!check("call: " + name, true)) {
+            StatusManager.setCallLedEnabled(false);
             return;
+        }
 
         StatusManager.setCallLedActive(true);
 
-        while (StatusManager.isCallLedEnabled()) {
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(
-                    ResourceUtils.getCallAnimation(name)))) {
-                Iterator<String> it = AnimationUtils.iterateCsvLines(reader, reversed);
-                while (it.hasNext()) {
-                    if (checkInterruption("call")) throw new InterruptedException();
-                    String[] pattern = it.next().split(",");
-                    if (ArrayUtils.contains(Constants.getSupportedAnimationPatternLengths(), pattern.length)) {
-                        updateLedFrame(pattern);
-                    } else {
-                        if (DEBUG) Log.d(TAG, "Animation line length mismatch | name: " + name + " | line: " + it.next());
-                        throw new InterruptedException();
+        try {
+            int[][] frames = sCallFramesCache.get(name);
+            if (frames == null) {
+                try (InputStream is = ResourceUtils.getCallAnimation(name)) {
+                    if (is != null) {
+                        String csv = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+                        frames = AnimationUtils.parseCsvToFrames(csv);
+                        if (frames != null) {
+                            sCallFramesCache.put(name, frames);
+                        }
                     }
-                    Thread.sleep(16, 666000);
+                } catch (Exception e) {
+                    if (DEBUG) Log.e(TAG, "Error loading call animation: " + name, e);
                 }
+            }
+
+            if (frames != null && frames.length > 0) {
+                playFramesLoop(frames, reversed, "call");
+                return;
+            }
+
+            while (StatusManager.isCallLedEnabled()) {
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                        ResourceUtils.getCallAnimation(name)))) {
+                    Iterator<String> it = AnimationUtils.iterateCsvLines(reader, reversed);
+                    long targetTime = System.nanoTime();
+                    while (it.hasNext()) {
+                        if (checkInterruption("call")) throw new InterruptedException();
+                        String line = it.next();
+                        String[] pattern = line.split(",");
+                        if (ArrayUtils.contains(Constants.getSupportedAnimationPatternLengths(), pattern.length)) {
+                            updateLedFrame(pattern);
+                        } else {
+                            if (DEBUG) Log.d(TAG, "Animation line length mismatch | name: " + name + " | line: " + line);
+                            throw new InterruptedException();
+                        }
+                        targetTime += FRAME_INTERVAL_NANOS;
+                        sleepRemaining(targetTime);
+                        if (System.nanoTime() - targetTime > FRAME_INTERVAL_NANOS) {
+                            targetTime = System.nanoTime();
+                        }
+                    }
+                } catch (InterruptedException e) {
+                    if (DEBUG) Log.d(TAG, "Call animation loop interrupted | name: " + name);
+                    break;
+                } catch (Exception e) {
+                    if (DEBUG) Log.d(TAG, "Exception while playing animation | name: " + name + " | exception: " + e);
+                    break;
+                } finally {
+                    if (StatusManager.isAllLedActive()) {
+                        if (DEBUG) Log.d(TAG, "All LED active, pause playing animation | name: " + name);
+                        while (StatusManager.isAllLedActive() && StatusManager.isCallLedEnabled()) {
+                            try {
+                                Thread.sleep(50);
+                            } catch (InterruptedException e) {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        } finally {
+            StatusManager.setCallLedActive(false);
+            StatusManager.setCallLedEnabled(false);
+            clearLEDs();
+        }
+    }
+
+    public static void playCallSynced(int[][] frames, boolean reversed) {
+        if (frames == null || frames.length == 0) return;
+
+        StatusManager.setCallLedEnabled(true);
+
+        if (!check("call: synced", true)) {
+            StatusManager.setCallLedEnabled(false);
+            return;
+        }
+
+        StatusManager.setCallLedActive(true);
+
+        try {
+            playFramesLoop(frames, reversed, "call");
+        } finally {
+            StatusManager.setCallLedActive(false);
+            StatusManager.setCallLedEnabled(false);
+            clearLEDs();
+        }
+    }
+
+    private static void playFramesLoop(int[][] frames, boolean reversed, String checkName) {
+        final int len = frames.length;
+        final int[] supportedLengths = Constants.getSupportedAnimationPatternLengths();
+        while (StatusManager.isCallLedEnabled()) {
+            try {
+                long targetTime = System.nanoTime();
+                for (int i = 0; i < len; i++) {
+                    if (checkInterruption(checkName)) throw new InterruptedException();
+                    int idx = reversed ? (len - 1 - i) : i;
+                    int[] pattern = frames[idx];
+                    if (ArrayUtils.contains(supportedLengths, pattern.length)) {
+                        updateLedFrame(pattern);
+                    }
+                    targetTime += FRAME_INTERVAL_NANOS;
+                    sleepRemaining(targetTime);
+                    if (System.nanoTime() - targetTime > FRAME_INTERVAL_NANOS) {
+                        targetTime = System.nanoTime();
+                    }
+                }
+            } catch (InterruptedException e) {
+                if (DEBUG) Log.d(TAG, "Animation loop interrupted | name: " + checkName);
+                break;
             } catch (Exception e) {
-                if (DEBUG) Log.d(TAG, "Exception while playing animation | name: " + name + " | exception: " + e);
+                if (DEBUG) Log.d(TAG, "Exception in animation loop | name: " + checkName + " | exception: " + e);
+                break;
             } finally {
                 if (StatusManager.isAllLedActive()) {
-                    if (DEBUG) Log.d(TAG, "All LED active, pause playing animation | name: " + name);
-                    while (StatusManager.isAllLedActive()) {}
+                    if (DEBUG) Log.d(TAG, "All LED active, pause playing animation | name: " + checkName);
+                    while (StatusManager.isAllLedActive() && StatusManager.isCallLedEnabled()) {
+                        try {
+                            Thread.sleep(50);
+                        } catch (InterruptedException e) {
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -435,8 +655,10 @@ public final class AnimationManager {
                             Thread.sleep(16, 666000);
                         }
                     }
-                } catch (InterruptedException ignored) {}
-                StatusManager.setAnimationActive(false);
+                } catch (InterruptedException ignored) {
+                } finally {
+                    StatusManager.setAnimationActive(false);
+                }
                 StatusManager.setEssentialLedActive(true);
                 if (DEBUG) Log.d(TAG, "Done playing animation | name: essential");
             });
@@ -484,27 +706,21 @@ public final class AnimationManager {
 
             pattern = AnimationUtils.buildPatternArray(zone1, zone2, zone3);
         } else {
-                pattern = new int[5];
-                pattern[4] = bandBrightness[0]; // low
-                pattern[3] = bandBrightness[1]; // mid-low
-                pattern[2] = bandBrightness[2]; // mid
-                pattern[0] = bandBrightness[3]; // mid-high
-                pattern[1] = bandBrightness[4]; // high
-            }
+            pattern = new int[5];
+            pattern[4] = bandBrightness[0]; // low
+            pattern[3] = bandBrightness[1]; // mid-low
+            pattern[2] = bandBrightness[2]; // mid
+            pattern[0] = bandBrightness[3]; // mid-high
+            pattern[1] = bandBrightness[4]; // high
+        }
 
         try {
             if (StatusManager.isGlyphIdle()) {
                 updateLedFrame(pattern);
-                Thread.sleep(106);
             }
         } catch (Exception e) {
             if (DEBUG)
-                Log.d(TAG, "Exception while playing animation | name: music " + " | exception: " + e);
-        } finally {
-            if (StatusManager.isGlyphIdle()) {
-                clearLEDs();
-                if (DEBUG) Log.d(TAG, "Done playing animation | name: music");
-            }
+                Log.d(TAG, "Exception while playing animation | name: music | exception: " + e);
         }
     }
 
@@ -557,16 +773,10 @@ public final class AnimationManager {
         try {
             if (StatusManager.isGlyphIdle()) {
                 updateLedFrame(pattern);
-                Thread.sleep(106);
             }
         } catch (Exception e) {
             if (DEBUG)
                 Log.d(TAG, "Exception while playing animation | name: music: " + snapshot + " | exception: " + e);
-        } finally {
-            if (StatusManager.isGlyphIdle()) {
-                clearLEDs();
-                if (DEBUG) Log.d(TAG, "Done playing animation | name: music " + snapshot);
-            }
         }
     }
 
@@ -577,6 +787,29 @@ public final class AnimationManager {
     }
 
     public static void updateLedFrame(int[] pattern) {
+        if (pattern == null || pattern.length == 0) return;
+
+        if (Constants.Device.isPhone3a() && pattern.length == 36) {
+            int maxPatternBrightness = Constants.MAX_PATTERN_BRIGHTNESS;
+            int currentBrightness = Constants.getBrightness();
+            int[] scaled = new int[36];
+
+            boolean essentialActive = StatusManager.isEssentialLedActive();
+            int minEssential = (maxPatternBrightness * 60) / 100;
+
+            for (int i = 0; i < 36; i++) {
+                int val = pattern[i];
+                if (essentialActive && (i >= 20 && i <= 30)) {
+                    if (val < minEssential) {
+                        val = minEssential;
+                    }
+                }
+                scaled[i] = (val * currentBrightness) / maxPatternBrightness;
+            }
+            FileUtils.writeFrameLed(scaled);
+            return;
+        }
+
         float[] floatPattern = new float[pattern.length];
         for (int i = 0; i < pattern.length; i++) {
             floatPattern[i] = (float) pattern[i];
@@ -609,25 +842,15 @@ public final class AnimationManager {
             pattern[i] = pattern[i] / maxPatternBrightness * currentBrightness;
         }
 
-        if (Constants.Device.isPhone3a()) {
-            int[] supportedLengths = Constants.getSupportedAnimationPatternLengths();
-            int[] zoneDefs = ResourceUtils.getIntArray("glyph_zone_channel_count");
-
-            Set<Integer> matchedLengths = Stream.concat(Arrays.stream(zoneDefs).boxed(),
-                            Arrays.stream(supportedLengths).boxed())
-                    .collect(Collectors.toSet());
-
-            boolean containsSize = matchedLengths.contains(pattern.length);
-
-            if (containsSize) {
-                final int volumeSize = ResourceUtils.getInteger("glyph_settings_volume_levels_num");
-                final int batterySize = ResourceUtils.getInteger("glyph_settings_battery_levels_num");
-                if (pattern.length == batterySize) { // Same size as essential
-                    pattern = AnimationUtils.buildPatternArray(new float[zoneDefs[1]],
-                            AnimationUtils.reverseFrameArray(pattern), new float[zoneDefs[2]]);
-                } else if (pattern.length == volumeSize) { // also progress
-                    pattern = AnimationUtils.buildPatternArray(pattern, new float[zoneDefs[0]],
-                            new float[zoneDefs[2]]);
+        if (Constants.Device.isPhone3a() && pattern.length != 36) {
+            initPhone3aDefs();
+            if (sMatchedLengths != null && sMatchedLengths.contains(pattern.length)) {
+                if (pattern.length == sBatterySize && sZoneDefs != null && sZoneDefs.length >= 3) {
+                    pattern = AnimationUtils.buildPatternArray(new float[sZoneDefs[1]],
+                            AnimationUtils.reverseFrameArray(pattern), new float[sZoneDefs[2]]);
+                } else if (pattern.length == sVolumeSize && sZoneDefs != null && sZoneDefs.length >= 3) {
+                    pattern = AnimationUtils.buildPatternArray(pattern, new float[sZoneDefs[0]],
+                            new float[sZoneDefs[2]]);
                 }
             } else {
                 Log.w(TAG, "Unsupported pattern length: " + pattern.length);
@@ -636,6 +859,22 @@ public final class AnimationManager {
         }
 
         FileUtils.writeFrameLed(pattern);
+    }
+
+    private static void initPhone3aDefs() {
+        if (sZoneDefs == null) {
+            try {
+                sSupportedLengths = Constants.getSupportedAnimationPatternLengths();
+                sZoneDefs = ResourceUtils.getIntArray("glyph_zone_channel_count");
+                sVolumeSize = ResourceUtils.getInteger("glyph_settings_volume_levels_num");
+                sBatterySize = ResourceUtils.getInteger("glyph_settings_battery_levels_num");
+                sMatchedLengths = Stream.concat(Arrays.stream(sZoneDefs).boxed(),
+                                Arrays.stream(sSupportedLengths).boxed())
+                        .collect(Collectors.toSet());
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to init Phone 3a definitions", e);
+            }
+        }
     }
 
     private static void updateLedSingle(int led, String brightness) {
@@ -684,6 +923,9 @@ public final class AnimationManager {
         int[] progressArray = StatusManager.getProgressArray();
         if (progressArray == null) {
             if (DEBUG) Log.d(TAG, "Progress array is null, cannot play animation");
+            StatusManager.setAnimationActive(false);
+            StatusManager.setProgressAnimationActive(false);
+            releaseWakeLock();
             return;
         }
 

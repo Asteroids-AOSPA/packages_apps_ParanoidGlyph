@@ -67,32 +67,66 @@ public final class FileUtils {
         return 0;
     }
 
-    public static void writeLine(String fileName, String value) {
-        String modePath = ResourceUtils.getString("glyph_settings_paths_mode_absolute");
-        BufferedWriter writerMode = null;
-        BufferedWriter writerValue = null;
-        try {
-            if (!modePath.isBlank()) {
-                writerMode = new BufferedWriter(new FileWriter(modePath));
-                writerMode.write("1");
+    private static String sModePath = null;
+    private static String sFramePath = null;
+    private static String sAllLedPath = null;
+    private static String sSingleLedPath = null;
+
+    private static String getModePath() {
+        if (sModePath == null) {
+            try {
+                sModePath = ResourceUtils.getString("glyph_settings_paths_mode_absolute");
+            } catch (Exception e) {
+                sModePath = "";
             }
-            writerValue = new BufferedWriter(new FileWriter(fileName));
+        }
+        return sModePath;
+    }
+
+    private static String getFramePath() {
+        if (sFramePath == null) {
+            try {
+                sFramePath = ResourceUtils.getString("glyph_settings_paths_frame_absolute");
+            } catch (Exception e) {
+                sFramePath = "";
+            }
+        }
+        return sFramePath;
+    }
+
+    private static volatile long sLastModeWriteTime = 0;
+
+    public static void setOperatingMode(int mode) {
+        String modePath = getModePath();
+        if (modePath != null && !modePath.isBlank()) {
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter(modePath))) {
+                writer.write(String.valueOf(mode));
+                sLastModeWriteTime = (mode == 1) ? android.os.SystemClock.uptimeMillis() : 0;
+            } catch (Exception e) {
+                Log.w(TAG, "Could not set operating mode: " + mode, e);
+            }
+        }
+    }
+
+    public static void writeLine(String fileName, String value) {
+        String modePath = getModePath();
+        if (modePath != null && !modePath.isBlank() && !modePath.equals(fileName)) {
+            long now = android.os.SystemClock.uptimeMillis();
+            if (now - sLastModeWriteTime > 1000) {
+                try (BufferedWriter writerMode = new BufferedWriter(new FileWriter(modePath))) {
+                    writerMode.write("1");
+                    sLastModeWriteTime = now;
+                } catch (Exception e) {
+                    Log.w(TAG, "Could not set operating mode", e);
+                }
+            }
+        }
+        try (BufferedWriter writerValue = new BufferedWriter(new FileWriter(fileName))) {
             writerValue.write(value);
         } catch (FileNotFoundException e) {
             Log.w(TAG, "No such file " + fileName + " for writing", e);
         } catch (IOException e) {
             Log.e(TAG, "Could not write to file " + fileName, e);
-        } finally {
-            try {
-                if (writerMode != null) {
-                    writerMode.close();
-                }
-                if (writerValue != null) {
-                    writerValue.close();
-                }
-            } catch (IOException e) {
-                // Ignored, not much we can do anyway
-            }
         }
     }
 
@@ -105,7 +139,16 @@ public final class FileUtils {
     }
 
     public static void writeAllLed(String value) {
-        writeLine(ResourceUtils.getString("glyph_settings_paths_all_absolute"), value);
+        if (sAllLedPath == null) {
+            try {
+                sAllLedPath = ResourceUtils.getString("glyph_settings_paths_all_absolute");
+            } catch (Exception e) {
+                sAllLedPath = "";
+            }
+        }
+        if (!sAllLedPath.isEmpty()) {
+            writeLine(sAllLedPath, value);
+        }
     }
 
     public static void writeAllLed(int value) {
@@ -117,23 +160,43 @@ public final class FileUtils {
     }
 
     public static void writeFrameLed(String value) {
-        writeLine(ResourceUtils.getString("glyph_settings_paths_frame_absolute"), value);
+        String path = getFramePath();
+        if (path != null && !path.isEmpty()) {
+            writeLine(path, value);
+        }
     }
 
     public static void writeFrameLed(int[] value) {
-        writeFrameLed(Arrays.toString(value).replaceAll("\\[|\\]", "").replace(", ", " "));
+        if (value == null || value.length == 0) return;
+        StringBuilder sb = new StringBuilder(value.length * 5);
+        for (int i = 0; i < value.length; i++) {
+            if (i > 0) sb.append(' ');
+            sb.append(value[i]);
+        }
+        writeFrameLed(sb.toString());
     }
 
     public static void writeFrameLed(float[] value) {
-        int[] intValue = new int[value.length];
+        if (value == null || value.length == 0) return;
+        StringBuilder sb = new StringBuilder(value.length * 5);
         for (int i = 0; i < value.length; i++) {
-            intValue[i] = Math.round(value[i]);
+            if (i > 0) sb.append(' ');
+            sb.append(Math.round(value[i]));
         }
-        writeFrameLed(intValue);
+        writeFrameLed(sb.toString());
     }
 
     public static void writeSingleLed(String led, String value) {
-        writeLine(ResourceUtils.getString("glyph_settings_paths_single_absolute"), led + " " + value);
+        if (sSingleLedPath == null) {
+            try {
+                sSingleLedPath = ResourceUtils.getString("glyph_settings_paths_single_absolute");
+            } catch (Exception e) {
+                sSingleLedPath = "";
+            }
+        }
+        if (!sSingleLedPath.isEmpty()) {
+            writeLine(sSingleLedPath, led + " " + value);
+        }
     }
 
     public static void writeSingleLed(int led, String value) {

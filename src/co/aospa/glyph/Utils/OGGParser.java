@@ -24,6 +24,7 @@ public class OGGParser {
     private static final byte[] OGG_MAGIC = {'O', 'g', 'g', 'S'};
     private static final byte[] OPUS_HEAD = {'O', 'p', 'u', 's', 'H', 'e', 'a', 'd'};
     private static final byte[] OPUS_TAGS = {'O', 'p', 'u', 's', 'T', 'a', 'g', 's'};
+    private static final byte[] VORBIS_TAGS = {0x03, 'v', 'o', 'r', 'b', 'i', 's'};
 
     public static final String composerField = "COMPOSER";
     private static final String glyphDotsField = "CUSTOM1";
@@ -76,6 +77,8 @@ public class OGGParser {
                         seenOpusHead = true;
                     } else if (seenOpusHead && isHeader(packet, OPUS_TAGS)) {
                         return parseComments(packet, OPUS_TAGS.length);
+                    } else if (isHeader(packet, VORBIS_TAGS)) {
+                        return parseComments(packet, VORBIS_TAGS.length);
                     }
                 }
             }

@@ -20,20 +20,20 @@
 
     <co.aospa.glyph.Preference.GlyphAnimationPreference
         android:key="glyph_settings_call_sub_preview"
-        android:selectable="false" />
+        android:selectable="true" />
 
     <com.android.settingslib.widget.MainSwitchPreference
         android:key="glyph_settings_call_sub_toggle"
         android:title="@string/glyph_settings_call_sub_toggle_title" />
 
 
-<!---    <SwitchPreferenceCompat
+    <SwitchPreferenceCompat
         android:key="glyph_settings_call_ogg_sync_toggle"
         android:icon="@drawable/ic_sync"
         android:title="@string/glyph_settings_call_ogg_sync_toggle_title"
-        android:defaultValue="false"
+        android:defaultValue="true"
         android:summary="@string/glyph_settings_call_ogg_sync_toggle_summary" />
- -->
+
 
         <ListPreference
             android:key="glyph_settings_call_sub_animations"

@@ -23,23 +23,23 @@ public final class StatusManager {
     private static final String TAG = "GlyphStatusManager";
     private static final boolean DEBUG = true;
 
-    private static boolean allLedActive = false;
-    private static boolean animationActive = false;
-    private static boolean chargingAnimationActive = false;
-    private static boolean volumeAnimationActive = false;
-    private static boolean callLedActive = false;
-    private static boolean essentialLedActive = false;
-    private static boolean progressAnimationActive = false;
-    private static boolean batterySavingActive = false;
-    private static int progressType = 0;
-    private static int progressLedLast = 0;
-    private static int chargingLedLast = 0;
-    private static int[] batteryArray = new int[ResourceUtils.getInteger("glyph_settings_battery_levels_num")];
-    private static int volumeLedLast = 0;
-    private static int[] volumeArray = new int[ResourceUtils.getInteger("glyph_settings_volume_levels_num")];
-    private static int[] progressArray = new int[ResourceUtils.getInteger("glyph_settings_volume_levels_num")];
+    private static volatile boolean allLedActive = false;
+    private static volatile boolean animationActive = false;
+    private static volatile boolean chargingAnimationActive = false;
+    private static volatile boolean volumeAnimationActive = false;
+    private static volatile boolean callLedActive = false;
+    private static volatile boolean essentialLedActive = false;
+    private static volatile boolean progressAnimationActive = false;
+    private static volatile boolean batterySavingActive = false;
+    private static volatile int progressType = 0;
+    private static volatile int progressLedLast = 0;
+    private static volatile int chargingLedLast = 0;
+    private static volatile int[] batteryArray = null;
+    private static volatile int volumeLedLast = 0;
+    private static volatile int[] volumeArray = null;
+    private static volatile int[] progressArray = null;
 
-    private static boolean callLedEnabled = false;
+    private static volatile boolean callLedEnabled = false;
 
     public static boolean isAnimationActive() {
         return animationActive;
@@ -106,6 +106,13 @@ public final class StatusManager {
     }
 
     public static int[] getBatteryArray() {
+        if (batteryArray == null) {
+            try {
+                batteryArray = new int[ResourceUtils.getInteger("glyph_settings_battery_levels_num")];
+            } catch (Exception e) {
+                batteryArray = new int[11];
+            }
+        }
         return batteryArray;
     }
 
@@ -122,6 +129,13 @@ public final class StatusManager {
     }
 
     public static int[] getVolumeArray() {
+        if (volumeArray == null) {
+            try {
+                volumeArray = new int[ResourceUtils.getInteger("glyph_settings_volume_levels_num")];
+            } catch (Exception e) {
+                volumeArray = new int[20];
+            }
+        }
         return volumeArray;
     }
 
@@ -162,6 +176,13 @@ public final class StatusManager {
     }
 
     public static int[] getProgressArray() {
+        if (progressArray == null) {
+            try {
+                progressArray = new int[ResourceUtils.getInteger("glyph_settings_volume_levels_num")];
+            } catch (Exception e) {
+                progressArray = new int[20];
+            }
+        }
         return progressArray;
     }
 
@@ -170,6 +191,9 @@ public final class StatusManager {
     }
 
     public static boolean isGlyphIdle() {
+        if (isBatterySavingActive()) {
+            return false;
+        }
         if (isAllLedActive() || isCallLedActive() || isAnimationActive() 
             || isChargingAnimationActive() || isVolumeAnimationActive() 
             || isCallLedEnabled() || isProgressAnimationActive()) {

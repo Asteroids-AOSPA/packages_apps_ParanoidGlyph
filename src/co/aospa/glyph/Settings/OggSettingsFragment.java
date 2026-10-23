@@ -163,6 +163,7 @@ public class OggSettingsFragment extends SettingsBasePreferenceFragment {
             );
             try (FileWriter writer = new FileWriter(target)) {
                 writer.write(csv);
+                AnimationManager.clearCallAnimationCache();
                 showToast(getString(R.string.ogg_csv_export_complete_message_start) + " "
                         + target.toString());
                 return true;

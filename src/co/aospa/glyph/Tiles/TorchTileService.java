@@ -25,8 +25,6 @@ import android.content.IntentFilter;
 import android.service.quicksettings.Tile;
 import android.service.quicksettings.TileService;
 
-import java.util.concurrent.Executors;
-
 import co.aospa.glyph.R;
 import co.aospa.glyph.Constants.Constants;
 import co.aospa.glyph.Manager.StatusManager;
@@ -136,8 +134,7 @@ public class TorchTileService extends TileService {
             action = Constants.ACTION_TORCH_DISABLE;
         }
         i.setAction(action);
-        Executors.newSingleThreadExecutor().execute(() ->
-                startService(i));
+        startService(i);
     }
 
     public static void requestTileUpdate(Context context) {

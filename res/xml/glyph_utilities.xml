@@ -22,4 +22,13 @@
         android:title="@string/glyph_settings_utilities_read_ogg_title"
         android:summary="@string/glyph_settings_utilities_read_ogg_summary" />
 
+    <PreferenceCategory
+        android:title="@string/glyph_settings_utilities_generator_title" />
+
+    <Preference
+        android:key="glyph_utilities_auto_generate"
+        android:icon="@drawable/ic_tune"
+        android:title="@string/glyph_utilities_auto_generate_title"
+        android:summary="@string/glyph_utilities_auto_generate_summary" />
+
 </PreferenceScreen>

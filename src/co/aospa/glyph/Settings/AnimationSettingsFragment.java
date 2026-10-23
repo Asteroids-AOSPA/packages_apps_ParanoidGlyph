@@ -28,12 +28,16 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.database.Cursor;
+import android.media.AudioAttributes;
+import android.media.MediaPlayer;
+import android.media.RingtoneManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.ContactsContract;
+import android.provider.Settings;
 import android.text.TextUtils;
 import android.util.Log;
 import android.view.View;
@@ -104,6 +108,8 @@ public class AnimationSettingsFragment
 
     private ListPreference mListPreference;
     private Preference mLivePreviewPreference;
+    private MediaPlayer mMediaPlayer;
+    private boolean mIsPreviewPlaying = false;
     private MultiSelectListPreference mMultiSelectListPreference;
     private SwitchPreferenceCompat mReverseAnimationSwitch;
     private PreferenceCategory appListCategory;
@@ -141,6 +147,9 @@ public class AnimationSettingsFragment
 
     @Override
     public void onCreatePreferences(Bundle savedInstanceState, String rootKey) {
+        if (Constants.CONTEXT == null && getContext() != null) {
+            Constants.CONTEXT = getContext().getApplicationContext();
+        }
 
         Bundle args = getArguments();
         fragmentType = args.getString("type", "").toUpperCase();
@@ -242,6 +251,9 @@ public class AnimationSettingsFragment
 
         mLivePreviewPreference = findPreference(livePreviewKey);
         mGlyphAnimationPreference = findPreference(animationPreviewKey);
+        if (mGlyphAnimationPreference != null) {
+            mGlyphAnimationPreference.setSelectable(true);
+        }
 
         mReverseAnimationSwitch = findPreference(reverseAnimationKey);
         mReverseAnimationSwitch.setOnPreferenceChangeListener(this);
@@ -363,8 +375,10 @@ public class AnimationSettingsFragment
                     appListCategory = findPreference(Constants.GLYPH_CALL_SUB_CATEGORY);
                     inflateAppLists();
 
-                    // mToneSyncSwitch = findPreference(Constants.GLYPH_CALL_TONE_SYNC);
-                    // mToneSyncSwitch.setOnPreferenceChangeListener(this);
+                    mToneSyncSwitch = findPreference(Constants.GLYPH_CALL_TONE_SYNC);
+                    if (mToneSyncSwitch != null) {
+                        mToneSyncSwitch.setOnPreferenceChangeListener(this);
+                    }
 
                 }
 
@@ -391,6 +405,10 @@ public class AnimationSettingsFragment
                 mGlyphFlipAnimationSwitch = findPreference(Constants.GLYPH_FLIP_SUB_ANIMATION_ENABLE);
                 mGlyphFlipAnimationSwitch.setOnPreferenceChangeListener(this);
 
+                Preference animListPref = findPreference(Constants.GLYPH_FLIP_SUB_ANIMATIONS);
+                if (animListPref != null) animListPref.setVisible(false);
+                Preference reversePref = findPreference(Constants.GLYPH_FLIP_REVERSE_ANIMATION_ENABLE);
+                if (reversePref != null) reversePref.setVisible(false);
             }
         }
     }
@@ -399,35 +417,12 @@ public class AnimationSettingsFragment
     public void onViewCreated (View view, Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
 
-        boolean isPlayable = true;
-
-        shouldAlternate = fragmentType.equals(FRAGMENT_TYPE_FLIP)
-                && mListPreference.getValue().equals(Constants.GLYPH_NOTIF_ANIMATION_ALTERNATE);
-        boolean shouldReverse = mReverseAnimationSwitch.isChecked() && !shouldAlternate;
-
-        mReverseAnimationSwitch.setVisible(!shouldAlternate);
-
-        if (mListPreference.getValue().startsWith(userAnimationPrefix)) {
-            String animationName = mListPreference.getValue();
-            AnimationUtils.checkUserAnimation(animationName);
-            try {
-                String csv = new String(ResourceUtils.getAnimation(animationName).readAllBytes(),
-                        StandardCharsets.UTF_8);
-                isPlayable = !AnimationUtils.isAnimationComplex(csv);
-            } catch (Exception e) {
-
-            }
+        if (mGlyphAnimationPreference != null) {
+            mGlyphAnimationPreference.setSelectable(true);
         }
-        if (isPlayable) {
-            mGlyphAnimationPreference.updateAnimation(
-                    isAnimationEnabled(),
-                    getGlyphAnimation(),
-                    1500,
-                    shouldReverse,
-                    shouldAlternate
-            );
-        }
-        mGlyphAnimationPreference.setVisible(isPlayable);
+
+        updateToneSyncState(mToneSyncSwitch != null && mToneSyncSwitch.isChecked());
+        checkAndLoadCurrentTone();
     }
 
     @Override
@@ -435,14 +430,21 @@ public class AnimationSettingsFragment
         final String preferenceKey = preference.getKey();
 
         if (preferenceKey.equals(animationListKey)) {
+            AnimationManager.clearCallAnimationCache();
             String animationName = newValue.toString();
             boolean isPlayable = true;
 
-            shouldAlternate = fragmentType.equals(FRAGMENT_TYPE_FLIP)
-                    && animationName.equals(Constants.GLYPH_NOTIF_ANIMATION_ALTERNATE);
-            boolean shouldReverse = mReverseAnimationSwitch.isChecked() && !shouldAlternate;
+            shouldAlternate = false;
+            boolean shouldReverse = !fragmentType.equals(FRAGMENT_TYPE_FLIP)
+                    && mReverseAnimationSwitch != null && mReverseAnimationSwitch.isChecked();
 
-            mReverseAnimationSwitch.setVisible(!shouldAlternate);
+            if (mReverseAnimationSwitch != null) {
+                if (fragmentType.equals(FRAGMENT_TYPE_FLIP)) {
+                    mReverseAnimationSwitch.setVisible(false);
+                } else {
+                    mReverseAnimationSwitch.setVisible(!shouldAlternate);
+                }
+            }
 
             if (shouldAlternate) animationName = SettingsManager.getGlyphNotifsAnimation();
             if (animationName.startsWith(userAnimationPrefix)) {
@@ -463,9 +465,7 @@ public class AnimationSettingsFragment
                     shouldAlternate
             );
             mGlyphAnimationPreference.setVisible(isPlayable);
-            if (livePreviewThread != null && livePreviewThread.isAlive()) {
-                livePreviewThread.interrupt();
-            }
+            stopLivePreview();
             if (!isPlayable) {
                 showToast(R.string.glyph_settings_user_animation_is_complex);
             }
@@ -476,21 +476,20 @@ public class AnimationSettingsFragment
         }
 
         if (preferenceKey.equals(Constants.GLYPH_FLIP_SUB_ANIMATION_ENABLE)) {
-            shouldAlternate = fragmentType.equals(FRAGMENT_TYPE_FLIP)
-                    && getGlyphAnimation().equals(Constants.GLYPH_NOTIF_ANIMATION_ALTERNATE);
-            boolean shouldReverse = mReverseAnimationSwitch.isChecked() && !shouldAlternate;
-
-            mGlyphAnimationPreference.updateAnimation((Boolean) newValue, 1500, shouldReverse);
+            shouldAlternate = false;
+            mGlyphAnimationPreference.updateAnimation((Boolean) newValue, 1500, false);
         }
 
-        if (preferenceKey.equals(Constants.GLYPH_NOTIFS_TONE_SYNC)) {
-            if ((Boolean) newValue) {
-                mListPreference.setTitle(R.string.glyph_settings_sub_animations_title_sync_enabled);
-            } else {
-                mListPreference.setTitle(R.string.glyph_settings_sub_animations_title);
-            }
+        if (preferenceKey.equals(Constants.GLYPH_NOTIFS_TONE_SYNC)
+                || preferenceKey.equals(Constants.GLYPH_CALL_TONE_SYNC)) {
+            boolean isChecked = (Boolean) newValue;
+            updateToneSyncState(isChecked);
             mHandler.post(ServiceUtils::checkGlyphService);
+            return true;
+        }
 
+        if (preferenceKey.equals(reverseAnimationKey)) {
+            mHandler.post(this::updatePreviewAnimation);
         }
 
         return true;
@@ -710,12 +709,7 @@ public class AnimationSettingsFragment
             }
 
             case FRAGMENT_TYPE_FLIP -> {
-                String value = SettingsManager.getGlyphFlipAnimation();
-                if (value.equals(Constants.GLYPH_NOTIF_ANIMATION_ALTERNATE)) {
-                    return SettingsManager.getGlyphNotifsAnimation();
-                } else {
-                    return value;
-                }
+                return "flip";
             }
         }
         return "";
@@ -856,52 +850,261 @@ public class AnimationSettingsFragment
 
     @Override
     public boolean onPreferenceTreeClick(Preference preference) {
-        if (livePreviewKey.equals(preference.getKey())) {
-            mLivePreviewPreference.setEnabled(false);
-            mLivePreviewPreference.setSummary(
-                    R.string.glyph_settings_animations_live_preview_summary_playing
-            );
-            livePreviewThread = new Thread(() -> {
-                Activity activity = getActivity();
-                try {
-                    Thread.sleep(1000);
-                } catch (InterruptedException e) {
-                    resetLivePreview();
-                    return;
-                }
-                shouldAlternate = fragmentType.equals(FRAGMENT_TYPE_FLIP)
-                        && mListPreference.getValue().equals(Constants.GLYPH_NOTIF_ANIMATION_ALTERNATE);
-                boolean shouldReverse = mReverseAnimationSwitch.isChecked() && !shouldAlternate;
-                AnimationManager.playCsv(
-                        requireContext(),
-                        getGlyphAnimation(),
-                        false,
-                        shouldReverse,
-                        shouldAlternate
-                );
-
-                if (activity != null) {
-                    activity.runOnUiThread(this::resetLivePreview);
-                }
-            });
-            livePreviewThread.start();
+        String key = preference.getKey();
+        if (key != null) {
+            if (key.equals(livePreviewKey) || key.equals(animationPreviewKey)) {
+                boolean toneSyncEnabled = (fragmentType.equals(FRAGMENT_TYPE_CALL) && SettingsManager.isGlyphRingtoneSyncEnabled())
+                        || (fragmentType.equals(FRAGMENT_TYPE_NOTIF) && SettingsManager.isGlyphNotifsSyncEnabled());
+                toggleLivePreview(toneSyncEnabled);
+                return true;
+            }
         }
-        return true;
+        return super.onPreferenceTreeClick(preference);
     }
 
     @Override
     public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
         setAnimationEnabled(isChecked);
         ServiceUtils.checkGlyphService();
-        mGlyphAnimationPreference.updateAnimation(isChecked, getGlyphAnimation(), 1500);
+        updatePreviewAnimation();
     }
-
 
     @Override
     public void onResume() {
         super.onResume();
         updatePrimarySwitches();
         resetLivePreview();
+        checkAndLoadCurrentTone();
+    }
+
+    @Override
+    public void onPause() {
+        stopLivePreview();
+        super.onPause();
+    }
+
+    private void updateToneSyncState(boolean isChecked) {
+        if (mListPreference != null) {
+            if (isChecked) {
+                mListPreference.setTitle(R.string.glyph_settings_sub_animations_title_sync_enabled);
+            } else {
+                mListPreference.setTitle(R.string.glyph_settings_sub_animations_title);
+            }
+        }
+        resetLivePreview();
+        updatePreviewAnimation();
+    }
+
+    private void updatePreviewAnimation() {
+        if (mGlyphAnimationPreference == null) return;
+
+        boolean isPlayable = true;
+        shouldAlternate = false;
+        boolean shouldReverse = !fragmentType.equals(FRAGMENT_TYPE_FLIP)
+                && mReverseAnimationSwitch != null && mReverseAnimationSwitch.isChecked();
+
+        if (mReverseAnimationSwitch != null) {
+            if (fragmentType.equals(FRAGMENT_TYPE_FLIP)) {
+                mReverseAnimationSwitch.setVisible(false);
+            } else {
+                mReverseAnimationSwitch.setVisible(!shouldAlternate);
+            }
+        }
+
+        boolean isCall = fragmentType.equals(FRAGMENT_TYPE_CALL);
+        boolean isNotif = fragmentType.equals(FRAGMENT_TYPE_NOTIF);
+        boolean toneSyncEnabled = (isCall && SettingsManager.isGlyphRingtoneSyncEnabled())
+                || (isNotif && SettingsManager.isGlyphNotifsSyncEnabled());
+
+        if (toneSyncEnabled && !isAppSpecific && !isContactSpecific) {
+            String currentCsv = isCall ? AnimationUtils.Holder.Call.getCsv() : AnimationUtils.Holder.Notification.getCsv();
+            if (currentCsv != null && !currentCsv.isEmpty()) {
+                mGlyphAnimationPreference.updateAnimationCsv(
+                        isAnimationEnabled(),
+                        currentCsv,
+                        1500,
+                        shouldReverse
+                );
+                mGlyphAnimationPreference.setVisible(true);
+                return;
+            }
+        }
+
+        String animName = getGlyphAnimation();
+        if (animName != null && animName.startsWith(userAnimationPrefix)) {
+            AnimationUtils.checkUserAnimation(animName);
+            try {
+                String csv = new String(ResourceUtils.getAnimation(animName).readAllBytes(),
+                        StandardCharsets.UTF_8);
+                isPlayable = !AnimationUtils.isAnimationComplex(csv);
+            } catch (Exception ignored) {}
+        }
+
+        if (isPlayable) {
+            mGlyphAnimationPreference.updateAnimation(
+                    isAnimationEnabled(),
+                    animName,
+                    1500,
+                    shouldReverse,
+                    shouldAlternate
+            );
+        }
+        mGlyphAnimationPreference.setVisible(isPlayable);
+    }
+
+    private void checkAndLoadCurrentTone() {
+        if (Constants.CONTEXT == null) {
+            Constants.CONTEXT = requireContext().getApplicationContext();
+        }
+
+        boolean isCall = fragmentType.equals(FRAGMENT_TYPE_CALL);
+        boolean isNotif = fragmentType.equals(FRAGMENT_TYPE_NOTIF);
+        boolean toneSyncEnabled = (isCall && SettingsManager.isGlyphRingtoneSyncEnabled())
+                || (isNotif && SettingsManager.isGlyphNotifsSyncEnabled());
+
+        if (toneSyncEnabled && !isAppSpecific && !isContactSpecific) {
+            boolean available = isCall
+                    ? AnimationUtils.Holder.Call.isAvailable()
+                    : AnimationUtils.Holder.Notification.isAvailable();
+            if (!available) {
+                ServiceUtils.checkGlyphService();
+            }
+        }
+        updatePreviewAnimation();
+    }
+
+    private Uri getActiveToneUri() {
+        Context context = getContext();
+        if (context == null) return null;
+        Uri soundUri = null;
+        if (fragmentType.equals(FRAGMENT_TYPE_CALL)) {
+            soundUri = RingtoneManager.getActualDefaultRingtoneUri(context, RingtoneManager.TYPE_RINGTONE);
+            if (soundUri == null) {
+                String uriStr = Settings.System.getString(context.getContentResolver(), Settings.System.RINGTONE);
+                if (uriStr != null) soundUri = Uri.parse(uriStr);
+            }
+        } else if (fragmentType.equals(FRAGMENT_TYPE_NOTIF)) {
+            soundUri = RingtoneManager.getActualDefaultRingtoneUri(context, RingtoneManager.TYPE_NOTIFICATION);
+            if (soundUri == null) {
+                String uriStr = Settings.System.getString(context.getContentResolver(), Settings.System.NOTIFICATION_SOUND);
+                if (uriStr != null) soundUri = Uri.parse(uriStr);
+            }
+        }
+        return soundUri;
+    }
+
+    private void toggleLivePreview(boolean playCurrentSynced) {
+        if (mIsPreviewPlaying) {
+            stopLivePreview();
+        } else {
+            startLivePreview(playCurrentSynced);
+        }
+    }
+
+    private void startLivePreview(boolean playCurrentSynced) {
+        stopLivePreview();
+        Context context = getContext();
+        if (context == null) return;
+        mIsPreviewPlaying = true;
+
+        if (mLivePreviewPreference != null) {
+            mLivePreviewPreference.setSummary(R.string.glyph_settings_animations_live_preview_summary_playing_tap_to_stop);
+        }
+
+        Uri toneUri = getActiveToneUri();
+        if (toneUri != null) {
+            try {
+                mMediaPlayer = new MediaPlayer();
+                mMediaPlayer.setDataSource(context, toneUri);
+                mMediaPlayer.setAudioAttributes(new AudioAttributes.Builder()
+                        .setUsage(fragmentType.equals(FRAGMENT_TYPE_CALL)
+                                ? AudioAttributes.USAGE_NOTIFICATION_RINGTONE
+                                : AudioAttributes.USAGE_NOTIFICATION)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build());
+                mMediaPlayer.setOnCompletionListener(mp -> stopLivePreview());
+                mMediaPlayer.setOnErrorListener((mp, what, extra) -> {
+                    Log.w(TAG, "MediaPlayer error during preview: what=" + what + ", extra=" + extra);
+                    return true;
+                });
+                mMediaPlayer.prepare();
+                mMediaPlayer.start();
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to start media player for preview", e);
+                if (mMediaPlayer != null) {
+                    try {
+                        mMediaPlayer.release();
+                    } catch (Exception ignored) {}
+                    mMediaPlayer = null;
+                }
+            }
+        }
+
+        livePreviewThread = new Thread(() -> {
+            boolean shouldReverse = !fragmentType.equals(FRAGMENT_TYPE_FLIP)
+                    && mReverseAnimationSwitch != null && mReverseAnimationSwitch.isChecked();
+
+            boolean isCall = fragmentType.equals(FRAGMENT_TYPE_CALL);
+            boolean isNotif = fragmentType.equals(FRAGMENT_TYPE_NOTIF);
+            boolean toneSyncEnabled = (isCall && SettingsManager.isGlyphRingtoneSyncEnabled())
+                    || (isNotif && SettingsManager.isGlyphNotifsSyncEnabled());
+
+            if (playCurrentSynced && toneSyncEnabled && !isAppSpecific && !isContactSpecific) {
+                if (isCall && AnimationUtils.Holder.Call.isAvailable()) {
+                    AnimationManager.playCallSynced(AnimationUtils.Holder.Call.getFrames(), shouldReverse);
+                    Activity activity = getActivity();
+                    if (activity != null) activity.runOnUiThread(this::stopLivePreview);
+                    return;
+                } else if (isNotif && AnimationUtils.Holder.Notification.isAvailable()) {
+                    AnimationManager.playNotificationSynced(AnimationUtils.Holder.Notification.getFrames());
+                    Activity activity = getActivity();
+                    if (activity != null) activity.runOnUiThread(this::stopLivePreview);
+                    return;
+                }
+            }
+
+            if (isCall && !isContactSpecific && !isAppSpecific) {
+                AnimationManager.playCall(getGlyphAnimation(), shouldReverse);
+            } else {
+                AnimationManager.playCsv(
+                        context,
+                        getGlyphAnimation(),
+                        false,
+                        shouldReverse,
+                        shouldAlternate
+                );
+            }
+
+            Activity activity = getActivity();
+            if (activity != null) {
+                activity.runOnUiThread(this::stopLivePreview);
+            }
+        });
+        livePreviewThread.start();
+    }
+
+    private synchronized void stopLivePreview() {
+        mIsPreviewPlaying = false;
+        if (mMediaPlayer != null) {
+            try {
+                mMediaPlayer.setOnCompletionListener(null);
+                mMediaPlayer.setOnErrorListener(null);
+                if (mMediaPlayer.isPlaying()) {
+                    mMediaPlayer.stop();
+                }
+                mMediaPlayer.release();
+            } catch (Exception ignored) {}
+            mMediaPlayer = null;
+        }
+        AnimationManager.stopCall();
+        if (livePreviewThread != null && livePreviewThread.isAlive()) {
+            livePreviewThread.interrupt();
+            livePreviewThread = null;
+        }
+        Activity activity = getActivity();
+        if (activity != null) {
+            activity.runOnUiThread(this::resetLivePreview);
+        }
     }
 
     private void updatePrimarySwitches() {
@@ -941,20 +1144,30 @@ public class AnimationSettingsFragment
     }
 
     private void resetLivePreview() {
-        mLivePreviewPreference.setEnabled(true);
-        mLivePreviewPreference.setSummary(
-                R.string.glyph_settings_animations_live_preview_summary
-        );
+        mIsPreviewPlaying = false;
+        if (mLivePreviewPreference != null) {
+            mLivePreviewPreference.setEnabled(true);
+            boolean isCall = fragmentType != null && fragmentType.equals(FRAGMENT_TYPE_CALL);
+            boolean isNotif = fragmentType != null && fragmentType.equals(FRAGMENT_TYPE_NOTIF);
+            boolean toneSyncEnabled = (isCall && SettingsManager.isGlyphRingtoneSyncEnabled())
+                    || (isNotif && SettingsManager.isGlyphNotifsSyncEnabled());
+            if (toneSyncEnabled && !isAppSpecific && !isContactSpecific) {
+                mLivePreviewPreference.setSummary(isCall
+                        ? R.string.glyph_settings_current_glyph_preview_summary
+                        : R.string.glyph_settings_current_glyph_preview_summary_notif);
+            } else {
+                mLivePreviewPreference.setSummary(
+                        R.string.glyph_settings_animations_live_preview_summary
+                );
+            }
+        }
     }
 
 
     @Override
     public void onDestroy() {
+        stopLivePreview();
         super.onDestroy();
-        if (livePreviewThread != null && livePreviewThread.isAlive()) {
-            livePreviewThread.interrupt();
-            livePreviewThread = null;
-        }
     }
 
 }

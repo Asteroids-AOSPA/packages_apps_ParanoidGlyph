@@ -22,10 +22,11 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.media.AudioManager;
-import android.os.IBinder;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.IBinder;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.util.Log;
 
 import co.aospa.glyph.Constants.Constants;
@@ -41,6 +42,7 @@ public class FlipToGlyphService extends Service {
 
     private boolean isFlipped;
     private int ringerMode;
+    private boolean mHasSavedRingerMode = false;
 
     private HandlerThread thread;
     private Handler mThreadHandler;
@@ -48,6 +50,7 @@ public class FlipToGlyphService extends Service {
     private AudioManager mAudioManager;
     private FlipToGlyphSensor mFlipToGlyphSensor;
     private Context mContext;
+    private PowerManager.WakeLock mWakeLock;
 
     @Override
     public void onCreate() {
@@ -60,7 +63,11 @@ public class FlipToGlyphService extends Service {
         mThreadHandler = new Handler(looper);
 
         mContext = this;
-        mFlipToGlyphSensor = new FlipToGlyphSensor(this, this::onFlip);
+        PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+        if (pm != null) {
+            mWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, TAG + ":WakeLock");
+        }
+        mFlipToGlyphSensor = new FlipToGlyphSensor(this, mThreadHandler, this::onFlip);
         mAudioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
     }
 
@@ -75,7 +82,12 @@ public class FlipToGlyphService extends Service {
     public void onDestroy() {
         if (DEBUG) Log.d(TAG, "Destroying service");
         mFlipToGlyphSensor.disable();
-        thread.quit();
+        thread.quitSafely();
+        if (mWakeLock != null && mWakeLock.isHeld()) {
+            try {
+                mWakeLock.release();
+            } catch (Exception ignored) {}
+        }
         super.onDestroy();
     }
 
@@ -87,34 +99,53 @@ public class FlipToGlyphService extends Service {
     private void onFlip(boolean flipped) {
         if (flipped == isFlipped) return;
         if (DEBUG) Log.d(TAG, "Flipped: " + flipped);
+
+        if (mWakeLock != null) {
+            try {
+                mWakeLock.acquire(3000L); // 3-second safety timeout
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to acquire wake lock: " + e.getMessage());
+            }
+        }
+
         if (flipped) {
-            if (SettingsManager.isGlyphFlipAnimationEnabled()
-                && StatusManager.isGlyphIdle()) {
-                String animationName = SettingsManager.getGlyphFlipAnimation();
-                boolean shouldReverse = SettingsManager.isGlyphFlipAnimationReversed();
-                if (animationName.equals(Constants.GLYPH_NOTIF_ANIMATION_ALTERNATE)) {
-                    AnimationManager.playCsvAlternate(mContext, SettingsManager.getGlyphNotifsAnimation());
-                } else if (shouldReverse) {
-                    AnimationManager.playCsvReverse(mContext, animationName);
-                } else {
-                    AnimationManager.playCsv(mContext, animationName);
-                }
+            if (SettingsManager.isGlyphFlipAnimationEnabled()) {
+                mThreadHandler.post(() -> {
+                    AnimationManager.playCsv(mContext, "flip", true);
+                });
             }
             
-            ringerMode = mAudioManager.getRingerModeInternal();
+            try {
+                ringerMode = mAudioManager.getRingerModeInternal();
+                mHasSavedRingerMode = true;
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to get current ringer mode: " + e.getMessage());
+                mHasSavedRingerMode = false;
+            }
+
             int preferredMode = SettingsManager.getFlipRingerMode();
             if (DEBUG) Log.d(TAG, "Preferred ringer mode: " + preferredMode);
             
             if (preferredMode != -1) {
                 if (DEBUG) Log.d(TAG, "Setting ringer mode to: " + preferredMode);
-                mAudioManager.setRingerModeInternal(preferredMode);
+                try {
+                    mAudioManager.setRingerModeInternal(preferredMode);
+                } catch (Exception e) {
+                    Log.e(TAG, "Failed to set ringer mode: " + e.getMessage());
+                }
             } else {
                 if (DEBUG) Log.d(TAG, "Following system ringer mode: " + ringerMode);
             }
         } else {
             int preferredMode = SettingsManager.getFlipRingerMode();
-            if (preferredMode != -1) {
-                mAudioManager.setRingerModeInternal(ringerMode);
+            if (preferredMode != -1 && mHasSavedRingerMode) {
+                if (DEBUG) Log.d(TAG, "Restoring ringer mode to: " + ringerMode);
+                try {
+                    mAudioManager.setRingerModeInternal(ringerMode);
+                    mHasSavedRingerMode = false;
+                } catch (Exception e) {
+                    Log.e(TAG, "Failed to restore ringer mode: " + e.getMessage());
+                }
             }
         }
         isFlipped = flipped;

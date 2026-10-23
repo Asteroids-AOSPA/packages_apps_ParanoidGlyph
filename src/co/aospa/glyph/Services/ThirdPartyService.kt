@@ -20,15 +20,16 @@ class ThirdPartyService : Service() {
         }
 
         override fun openSession() {
-            Log.d("IGlyphServiceImpl", "openSession")
-            acquireWakeLock() // Acquire the wake lock when opening the session
-            StatusManager.setAnimationActive(true);
+            Log.d("ThirdPartyService", "openSession")
+            acquireWakeLock()
+            StatusManager.setAnimationActive(true)
         }
 
         override fun closeSession() {
-            Log.d("IGlyphServiceImpl", "closeSession")
-            StatusManager.setAnimationActive(false);
-            releaseWakeLock() // Release the wake lock when closing the session
+            Log.d("ThirdPartyService", "closeSession")
+            StatusManager.setAnimationActive(false)
+            AnimationManager.clearLEDs()
+            releaseWakeLock()
         }
 
         override fun register(str: String) = true
@@ -43,18 +44,36 @@ class ThirdPartyService : Service() {
         return binder
     }
 
+    override fun onUnbind(intent: Intent?): Boolean {
+        Log.d("ThirdPartyService", "onUnbind - cleaning up session")
+        StatusManager.setAnimationActive(false)
+        AnimationManager.clearLEDs()
+        releaseWakeLock()
+        return super.onUnbind(intent)
+    }
+
+    override fun onDestroy() {
+        Log.d("ThirdPartyService", "onDestroy - cleaning up session")
+        StatusManager.setAnimationActive(false)
+        AnimationManager.clearLEDs()
+        releaseWakeLock()
+        super.onDestroy()
+    }
+
     private fun acquireWakeLock() {
         if (wakeLock == null) {
             val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
             wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ThirdPartyService::WakeLock")
-            wakeLock?.acquire()
-            Log.d("ThirdPartyService", "WakeLock acquired")
+            wakeLock?.acquire(60000)
+            Log.d("ThirdPartyService", "WakeLock acquired with safety timeout")
         }
     }
 
     private fun releaseWakeLock() {
         if (wakeLock != null) {
-            wakeLock?.release()
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+            }
             wakeLock = null
             Log.d("ThirdPartyService", "WakeLock released")
         }

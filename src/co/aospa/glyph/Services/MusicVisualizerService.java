@@ -132,6 +132,9 @@ public class MusicVisualizerService extends Service {
                         if (mAudioManager.isMusicActive() && StatusManager.isGlyphIdle()) {
                             if (DEBUG) Log.d(TAG, "Music is active");
                             processAudioFFT(fft, samplingRate);
+                        } else if (!mAudioManager.isMusicActive() && StatusManager.isGlyphIdle() && !prevSnapshot.isEmpty()) {
+                            AnimationManager.clearLEDs();
+                            prevSnapshot.clear();
                         }
                     }
                 }, Visualizer.getMaxCaptureRate() / 2, false, true
@@ -168,6 +171,7 @@ public class MusicVisualizerService extends Service {
             SettingsManager.setIntSecure(pulsePrefKey, true);
         }
         PulseSettingObserver.unregister(getContentResolver());
+        AnimationManager.clearLEDs();
         thread.quit();
         super.onDestroy();
     }

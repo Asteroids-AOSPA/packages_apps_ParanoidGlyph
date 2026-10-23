@@ -2,6 +2,7 @@ package co.aospa.glyph.Utils;
 
 import static co.aospa.glyph.Utils.InterfaceUtils.showToast;
 
+import android.content.Context;
 import android.util.Log;
 
 import java.io.BufferedReader;
@@ -124,7 +125,7 @@ public class AnimationUtils {
         validateFrameBrightness(frame, true);
     }
 
-    public static boolean isAnimationComplex(String csv) throws IOException {
+    public static boolean isAnimationComplex(String csv) {
         try (BufferedReader reader = new BufferedReader(new StringReader(csv))) {
             Iterator<String> it = iterateCsvLines(reader, false);
             String line;
@@ -136,7 +137,7 @@ public class AnimationUtils {
                         .toArray();
                 if (arr.length == 5) return false;
                 switch (device) {
-                    case Constants.Device.PHONE3A -> {
+                    case Constants.Device.PHONE3A, Constants.Device.PHONE3APRO -> {
                         if (allSame(arr, 0, 20)
                                 && allSame(arr, 21, 31)
                                 && allSame(arr, 32, 35)) {
@@ -218,17 +219,18 @@ public class AnimationUtils {
     }
 
     public static boolean isCompatible(String csv) {
+        String csvDevice = getDevice(csv);
 
-        boolean compatible;
-
-        compatible = getDevice(csv).equals(Constants.Device.getDevice());
-
-        if (Constants.Device.isPhone2()) {
-            compatible = getDevice(csv).equals(Constants.Device.getDevice())
-                    || getDevice(csv).equals(Constants.Device.PHONE1);
+        if (Constants.Device.isPhone3a()) {
+            return Constants.Device.PHONE3A.equals(csvDevice);
         }
 
-        return compatible;
+        if (Constants.Device.isPhone2()) {
+            return Constants.Device.PHONE2.equals(csvDevice)
+                    || Constants.Device.PHONE1.equals(csvDevice);
+        }
+
+        return csvDevice.equals(Constants.Device.getDevice());
     }
 
     public static float[] buildPatternArray(float[]... arrays) {
@@ -346,6 +348,36 @@ public class AnimationUtils {
         return copy;
     }
 
+    public static int[][] parseCsvToFrames(String csv) {
+        if (csv == null || csv.isEmpty()) return null;
+        String[] lines = csv.split("\\R");
+        List<int[]> list = new ArrayList<>(lines.length);
+        for (String raw : lines) {
+            String line = raw.trim();
+            if (line.isEmpty()) continue;
+            String[] tokens = line.split(",");
+            int[] frame = new int[tokens.length];
+            int count = 0;
+            for (String tok : tokens) {
+                String t = tok.trim();
+                if (!t.isEmpty()) {
+                    try {
+                        int v = Integer.parseInt(t);
+                        frame[count++] = Math.max(0, v);
+                    } catch (NumberFormatException ignored) {}
+                }
+            }
+            if (count > 0) {
+                if (count == frame.length) {
+                    list.add(frame);
+                } else {
+                    list.add(Arrays.copyOf(frame, count));
+                }
+            }
+        }
+        return list.isEmpty() ? null : list.toArray(new int[0][]);
+    }
+
     public static class Holder {
 
         public static class oggMeta {
@@ -365,42 +397,157 @@ public class AnimationUtils {
             }
         }
 
+        public static Context getContext() {
+            return Constants.CONTEXT;
+        }
+
         public static class Call {
             private static String csv;
+            private static int[][] frames;
+            private static final String CACHE_FILE_NAME = "current_ringtone.csv";
 
             public static void setCsv(String c) {
+                setCsv(c, true);
+            }
+
+            public static void setCsv(String c, boolean persist) {
                 csv = c;
+                if (c != null && !c.isEmpty()) {
+                    frames = parseCsvToFrames(c);
+                    Context ctx = getContext();
+                    if (persist && ctx != null) {
+                        try {
+                            java.io.File file = new java.io.File(ctx.getFilesDir(), CACHE_FILE_NAME);
+                            java.nio.file.Files.writeString(file.toPath(), c, StandardCharsets.UTF_8);
+                        } catch (Exception ignored) {}
+                    }
+                } else {
+                    frames = null;
+                }
             }
 
             public static boolean isAvailable() {
-                return (csv != null && !csv.isEmpty());
+                if (frames != null && frames.length > 0) {
+                    return true;
+                }
+                loadFromCache();
+                return (frames != null && frames.length > 0);
+            }
+
+            private static void loadFromCache() {
+                Context ctx = getContext();
+                if (ctx == null) return;
+                try {
+                    java.io.File file = new java.io.File(ctx.getFilesDir(), CACHE_FILE_NAME);
+                    if (file.exists() && file.length() > 0) {
+                        String cached = java.nio.file.Files.readString(file.toPath(), StandardCharsets.UTF_8);
+                        if (cached != null && !cached.isEmpty()) {
+                            csv = cached;
+                            frames = parseCsvToFrames(cached);
+                        }
+                    }
+                } catch (Exception ignored) {}
+            }
+
+            public static int[][] getFrames() {
+                if (frames == null) {
+                    loadFromCache();
+                }
+                return frames;
             }
 
             public static String getCsv() {
+                if (csv == null) {
+                    loadFromCache();
+                }
                 return csv;
             }
 
             public static void clear() {
                 csv = null;
+                frames = null;
+                Context ctx = getContext();
+                if (ctx != null) {
+                    try {
+                        java.io.File file = new java.io.File(ctx.getFilesDir(), CACHE_FILE_NAME);
+                        if (file.exists()) file.delete();
+                    } catch (Exception ignored) {}
+                }
             }
         }
 
         public static class Notification {
             private static String csv;
+            private static int[][] frames;
+            private static final String CACHE_FILE_NAME = "current_notification.csv";
+
             public static void setCsv(String c) {
-                csv = c ;
+                setCsv(c, true);
+            }
+
+            public static void setCsv(String c, boolean persist) {
+                csv = c;
+                if (c != null && !c.isEmpty()) {
+                    frames = parseCsvToFrames(c);
+                    Context ctx = getContext();
+                    if (persist && ctx != null) {
+                        try {
+                            java.io.File file = new java.io.File(ctx.getFilesDir(), CACHE_FILE_NAME);
+                            java.nio.file.Files.writeString(file.toPath(), c, StandardCharsets.UTF_8);
+                        } catch (Exception ignored) {}
+                    }
+                } else {
+                    frames = null;
+                }
             }
 
             public static boolean isAvailable() {
-                return (csv != null && !csv.isEmpty());
+                if (frames != null && frames.length > 0) {
+                    return true;
+                }
+                loadFromCache();
+                return (frames != null && frames.length > 0);
+            }
+
+            private static void loadFromCache() {
+                Context ctx = getContext();
+                if (ctx == null) return;
+                try {
+                    java.io.File file = new java.io.File(ctx.getFilesDir(), CACHE_FILE_NAME);
+                    if (file.exists() && file.length() > 0) {
+                        String cached = java.nio.file.Files.readString(file.toPath(), StandardCharsets.UTF_8);
+                        if (cached != null && !cached.isEmpty()) {
+                            csv = cached;
+                            frames = parseCsvToFrames(cached);
+                        }
+                    }
+                } catch (Exception ignored) {}
+            }
+
+            public static int[][] getFrames() {
+                if (frames == null) {
+                    loadFromCache();
+                }
+                return frames;
             }
 
             public static String getCsv() {
+                if (csv == null) {
+                    loadFromCache();
+                }
                 return csv;
             }
 
             public static void clear() {
                 csv = null;
+                frames = null;
+                Context ctx = getContext();
+                if (ctx != null) {
+                    try {
+                        java.io.File file = new java.io.File(ctx.getFilesDir(), CACHE_FILE_NAME);
+                        if (file.exists()) file.delete();
+                    } catch (Exception ignored) {}
+                }
             }
         }
 

@@ -22,6 +22,7 @@ import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
+import android.os.Handler;
 import android.util.Log;
 
 import java.time.Duration;
@@ -39,27 +40,39 @@ public class FlipToGlyphSensor implements SensorEventListener {
     private SensorManager mSensorManager;
     private Sensor mSensorAccelerometer;
     private Context mContext;
+    private Handler mHandler;
 
-    private Duration mTimeThreshold = Duration.ofMillis(1_000L);;
-    private float mAccelerationThreshold = 0.2f;
-    private float mZAccelerationThreshold = -9.5f;
-    private float mZAccelerationThresholdLenient = mZAccelerationThreshold + 1.0f;
-    private float mPrevAcceleration = 0;
-    private long mPrevAccelerationTime = 0;
+    private Duration mTimeThreshold = Duration.ofMillis(700L);
+    private float mMovementThreshold = 0.8f;
+    private float mZAccelerationThreshold = -8.0f;
+    private float mZAccelerationThresholdLenient = -6.5f;
+
+    private float mPrevX = 0f;
+    private float mPrevY = 0f;
+    private float mPrevZ = 0f;
+    private long mPrevAccelerationTime = 0L;
     private boolean mZAccelerationIsFaceDown = false;
     private long mZAccelerationFaceDownTime = 0L;
+    private boolean mFirstSample = true;
 
     private static final float MOVING_AVERAGE_WEIGHT = 0.5f;
-    private final ExponentialMovingAverage mCurrentXYAcceleration =
-            new ExponentialMovingAverage(MOVING_AVERAGE_WEIGHT);
     private final ExponentialMovingAverage mCurrentZAcceleration =
             new ExponentialMovingAverage(MOVING_AVERAGE_WEIGHT);
 
     public FlipToGlyphSensor(Context context, @NonNull Consumer<Boolean> onFlip) {
+        this(context, null, onFlip);
+    }
+
+    public FlipToGlyphSensor(Context context, Handler handler, @NonNull Consumer<Boolean> onFlip) {
         mContext = context;
+        mHandler = handler;
         mOnFlip = Objects.requireNonNull(onFlip);
         mSensorManager = mContext.getSystemService(SensorManager.class);
-        mSensorAccelerometer = mSensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER, false);
+        mSensorAccelerometer = mSensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER, true);
+        if (mSensorAccelerometer == null) {
+            Log.w(TAG, "Wakeup accelerometer not found, falling back to non-wakeup");
+            mSensorAccelerometer = mSensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER, false);
+        }
     }
 
     @Override
@@ -68,16 +81,34 @@ public class FlipToGlyphSensor implements SensorEventListener {
 
         final float x = event.values[0];
         final float y = event.values[1];
-        mCurrentXYAcceleration.updateMovingAverage(x * x + y * y);
-        mCurrentZAcceleration.updateMovingAverage(event.values[2]);
-
+        final float z = event.values[2];
         final long curTime = event.timestamp;
-        if (Math.abs(mCurrentXYAcceleration.mMovingAverage - mPrevAcceleration)
-                > mAccelerationThreshold) {
-            mPrevAcceleration = mCurrentXYAcceleration.mMovingAverage;
+
+        if (mFirstSample) {
+            mCurrentZAcceleration.reset(z);
+            mPrevX = x;
+            mPrevY = y;
+            mPrevZ = z;
+            mPrevAccelerationTime = curTime;
+            mFirstSample = false;
+            return;
+        }
+
+        mCurrentZAcceleration.updateMovingAverage(z);
+
+        final float deltaX = Math.abs(x - mPrevX);
+        final float deltaY = Math.abs(y - mPrevY);
+        final float deltaZ = Math.abs(z - mPrevZ);
+        final float totalDelta = deltaX + deltaY + deltaZ;
+
+        mPrevX = x;
+        mPrevY = y;
+        mPrevZ = z;
+
+        if (totalDelta > mMovementThreshold) {
             mPrevAccelerationTime = curTime;
         }
-        final boolean moving = curTime - mPrevAccelerationTime <= mTimeThreshold.toNanos();
+        final boolean moving = (curTime - mPrevAccelerationTime) <= mTimeThreshold.toNanos();
 
         final float zAccelerationThreshold =
                 isFlipped ? mZAccelerationThresholdLenient : mZAccelerationThreshold;
@@ -85,7 +116,8 @@ public class FlipToGlyphSensor implements SensorEventListener {
                 mCurrentZAcceleration.mMovingAverage < zAccelerationThreshold;
         final boolean isFaceDownForPeriod = isCurrentlyFaceDown
                 && mZAccelerationIsFaceDown
-                && curTime - mZAccelerationFaceDownTime > mTimeThreshold.toNanos();
+                && (curTime - mZAccelerationFaceDownTime) > mTimeThreshold.toNanos();
+
         if (isCurrentlyFaceDown && !mZAccelerationIsFaceDown) {
             mZAccelerationFaceDownTime = curTime;
             mZAccelerationIsFaceDown = true;
@@ -111,10 +143,23 @@ public class FlipToGlyphSensor implements SensorEventListener {
 
     public void enable() {
         if (DEBUG) Log.d(TAG, "Enabling Sensor");
-        mSensorManager.registerListener(this, mSensorAccelerometer,
-                    SensorManager.SENSOR_DELAY_NORMAL,
-                    mContext.getResources().getInteger(
-                        com.android.internal.R.integer.config_flipToScreenOffMaxLatencyMicros));
+        if (mSensorAccelerometer == null) {
+            Log.e(TAG, "Cannot enable: No accelerometer sensor available");
+            return;
+        }
+        mFirstSample = true;
+        isFlipped = false;
+        mZAccelerationIsFaceDown = false;
+        mPrevAccelerationTime = 0L;
+        mZAccelerationFaceDownTime = 0L;
+        mSensorManager.unregisterListener(this, mSensorAccelerometer);
+        if (mHandler != null) {
+            mSensorManager.registerListener(this, mSensorAccelerometer,
+                    SensorManager.SENSOR_DELAY_NORMAL, 0, mHandler);
+        } else {
+            mSensorManager.registerListener(this, mSensorAccelerometer,
+                    SensorManager.SENSOR_DELAY_NORMAL, 0);
+        }
     }
 
     public void disable() {
@@ -144,6 +189,10 @@ public class FlipToGlyphSensor implements SensorEventListener {
 
         void reset() {
             mMovingAverage = this.mInitialAverage;
+        }
+
+        void reset(float initialAverage) {
+            mMovingAverage = initialAverage;
         }
     }
 }

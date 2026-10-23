@@ -179,10 +179,12 @@
         </service>
         <service
             android:name=".Services.ThirdPartyService"
-            android:exported="true"
-            android:permission="android.permission.BIND_SERVICE">
+            android:exported="true">
             <intent-filter>
                 <action android:name="co.aospa.glyph.Services.ThirdPartyService" />
+                <action android:name="com.nothing.thirdparty.GlyphService" />
+                <action android:name="com.nothing.thirdparty.bind_glyphservice" />
+                <action android:name="com.nothing.thirdparty.IGlyphService" />
             </intent-filter>
         </service>
 
@@ -231,16 +233,6 @@
             </intent-filter>
         </activity>
 
-        <activity
-            android:name=".Settings.ScheduleSettingsActivity"
-            android:configChanges="orientation|screenSize"
-            android:exported="false"
-            android:theme="@style/Theme.SubSettingsBase.Expressive">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-            </intent-filter>
-        </activity>
-        
         <activity
             android:name=".Settings.ScheduleSettingsActivity"
             android:configChanges="orientation|screenSize"

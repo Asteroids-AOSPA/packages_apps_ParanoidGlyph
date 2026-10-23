@@ -106,6 +106,7 @@ public class NotificationService extends NotificationListenerService
         mSharedPreferences.unregisterOnSharedPreferenceChangeListener(this);
         mSettingObserver.unregister(mContentResolver);
         thread.quit();
+        executor.shutdownNow();
         super.onDestroy();
     }
 
@@ -177,9 +178,8 @@ public class NotificationService extends NotificationListenerService
                 } else {
                     if (SettingsManager.isGlyphNotifsSyncEnabled()
                             && AnimationUtils.Holder.Notification.isAvailable()) {
-                        AnimationManager.playExternalCsv(
-                                AnimationUtils.Holder.Notification.getCsv(),
-                                "notification"
+                        AnimationManager.playNotificationSynced(
+                                AnimationUtils.Holder.Notification.getFrames()
                         );
                     } else {
                         if (SettingsManager.isGlyphNotifsAnimationReversed()) {
@@ -196,11 +196,12 @@ public class NotificationService extends NotificationListenerService
                     }
                 }
             };
-            pendingCallbacks.put(notifKey, runnable);
-            mThreadHandler.postDelayed(() -> {
+            Runnable delayedTask = () -> {
                 Future<?> future = executor.submit(runnable);
                 pendingFutures.put(notifKey, future);
-            }, SYNC_DELAY);
+            };
+            pendingCallbacks.put(notifKey, delayedTask);
+            mThreadHandler.postDelayed(delayedTask, SYNC_DELAY);
         }
         
         if (SettingsManager.isGlyphNotifsAppEssential(packageName)
@@ -241,6 +242,7 @@ public class NotificationService extends NotificationListenerService
 
             if (progress >= 0 && maxProgress > 0 && !indeterminate) {
                 Intent intent = new Intent(ProgressService.ACTION_PROGRESS_NOTIFICATION);
+                intent.setPackage(getPackageName());
                 intent.putExtra(ProgressService.EXTRA_PACKAGE_NAME, sbn.getPackageName());
                 intent.putExtra(ProgressService.EXTRA_NOTIFICATION_ID, sbn.getId());
                 intent.putExtra(ProgressService.EXTRA_PROGRESS, progress);
@@ -271,6 +273,7 @@ public class NotificationService extends NotificationListenerService
 
             if (progress >= 0 && maxProgress > 0) {
                 Intent intent = new Intent(ProgressService.ACTION_PROGRESS_REMOVED);
+                intent.setPackage(getPackageName());
                 intent.putExtra(ProgressService.EXTRA_PACKAGE_NAME, sbn.getPackageName());
                 intent.putExtra(ProgressService.EXTRA_NOTIFICATION_ID, sbn.getId());
                 sendBroadcast(intent);

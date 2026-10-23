@@ -55,7 +55,12 @@
 
     <string name="glyph_settings_animations_live_preview_summary_playing">Now Playing...</string>
     <string name="glyph_settings_animations_live_preview_title">Live Preview</string>
-    <string name="glyph_settings_animations_live_preview_summary">Preview selected animation on Glyphs</string>
+    <string name="glyph_settings_animations_live_preview_summary">Preview selected animation on Glyphs with sound</string>
+    <string name="glyph_settings_current_glyph_preview_title">Current Glyph animation</string>
+    <string name="glyph_settings_current_glyph_preview_summary">Preview current synced ringtone animation with sound</string>
+    <string name="glyph_settings_current_glyph_preview_summary_notif">Preview current synced notification animation with sound</string>
+    <string name="glyph_settings_animations_live_preview_summary_sync">Preview current synced animation on Glyphs with sound</string>
+    <string name="glyph_settings_animations_live_preview_summary_playing_tap_to_stop">Playing preview with sound... (tap to stop)</string>
 
     <string name="glyph_settings_flip_title">Flip to Glyph</string>
 
@@ -243,5 +248,32 @@
 
     <string name="file_export_complete_message">File saved successfully!</string>
     <string name="file_already_exported_summary">File already saved</string>
+
+    <!-- Auto Generator -->
+    <string name="glyph_settings_utilities_generator_title">Generator</string>
+    <string name="glyph_utilities_auto_generate_title">Auto Generator</string>
+    <string name="glyph_utilities_auto_generate_summary">Generate Glyph animations from any audio</string>
+    <string name="glyph_generator_dialog_title">Glyph Auto Generator</string>
+    <string name="glyph_generator_mode_beats">Beats (Heavy rhythm sweep)</string>
+    <string name="glyph_generator_mode_smooth">Smooth (Anti-flicker reactive)</string>
+    <string name="glyph_generator_mode_frequency">Frequency (7-band spectrum)</string>
+    <string name="glyph_generator_mode_pattern">Pattern (Dynamic choreography)</string>
+    <string name="glyph_generator_action_generate">Generate</string>
+    <string name="glyph_generator_action_preview">Live Preview</string>
+    <string name="glyph_generator_action_apply_call">Set as Ringtone</string>
+    <string name="glyph_generator_action_apply_notif">Set as Notification</string>
+    <string name="glyph_generator_action_export_csv">Export CSV</string>
+    <string name="glyph_generator_generating">Analyzing audio and generating 60 FPS Glyph frames...</string>
+    <string name="glyph_generator_success">Generated %1$d frames (%2$ds)</string>
+    <string name="glyph_generator_applied_call">Set as active Call Glyph animation!</string>
+    <string name="glyph_generator_applied_notif">Set as active Notification Glyph animation!</string>
+    <string name="glyph_generator_source_title">Select Audio Source</string>
+    <string name="glyph_generator_source_ringtone">Current Ringtone (%s)</string>
+    <string name="glyph_generator_source_notif">Current Notification (%s)</string>
+    <string name="glyph_generator_source_file">Choose Audio File…</string>
+    <string name="glyph_generator_source_default_ringtone">Ringtone</string>
+    <string name="glyph_generator_source_default_notif">Notification</string>
+    <string name="glyph_generator_no_ringtone">No ringtone set</string>
+    <string name="glyph_generator_no_notif">No notification sound set</string>
 
 </resources>

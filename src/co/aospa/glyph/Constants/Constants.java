@@ -52,12 +52,13 @@ public final class Constants {
     public static final String GLYPH_CHARGING_LEVEL_ENABLE = "glyph_settings_charging_level";
     public static final String GLYPH_CHARGING_POWERSHARE_ENABLE = "glyph_settings_charging_powershare";
     public static final String GLYPH_CALL_CATEGORY = "glyph_settings_call";
-    // public static final String GLYPH_CALL_TONE_SYNC = "glyph_settings_call_ogg_sync_toggle";
+    public static final String GLYPH_CALL_TONE_SYNC = "glyph_settings_call_ogg_sync_toggle";
     public static final String GLYPH_CALL_ENABLE = "glyph_settings_call_toggle";
     public static final String GLYPH_CALL_REVERSE_ANIMATION_ENABLE = "glyph_settings_call_sub_animations_reverse_toggle";
     public static final String GLYPH_CALL_SUB_PREVIEW = "glyph_settings_call_sub_preview";
     public static final String GLYPH_CALL_SUB_ANIMATIONS = "glyph_settings_call_sub_animations";
     public static final String GLYPH_CALL_SUB_CONTACT_SELECT = "glyph_settings_call_sub_contact_select";
+    public static final String GLYPH_CALL_CURRENT_PREVIEW = "glyph_settings_call_current_preview";
     public static final String GLYPH_CALL_SUB_LIVE_PREVIEW = "glyph_settings_call_sub_animations_live_preview";
     public static final String GLYPH_CALL_SUB_ENABLE = "glyph_settings_call_sub_toggle";
     public static final String GLYPH_CALL_SUB_CATEGORY = "glyph_settings_call_sub";
@@ -66,6 +67,7 @@ public final class Constants {
     public static final String GLYPH_NOTIFS_ENABLE = "glyph_settings_notifs_toggle";
     public static final String GLYPH_NOTIFS_TONE_SYNC = "glyph_settings_notifs_ogg_sync_toggle";
     public static final String GLYPH_NOTIFS_SUB_PREVIEW = "glyph_settings_notifs_sub_preview";
+    public static final String GLYPH_NOTIFS_CURRENT_PREVIEW = "glyph_settings_notifs_current_preview";
     public static final String GLYPH_NOTIFS_SUB_ANIMATIONS = "glyph_settings_notifs_sub_animations";
     public static final String GLYPH_NOTIFS_SUB_LIVE_PREVIEW = "glyph_settings_notifs_sub_animations_live_preview";
     public static final String GLYPH_NOTIFS_SUB_ESSENTIAL = "glyph_settings_notifs_sub_essential";
@@ -112,6 +114,7 @@ public final class Constants {
     public static final String GLYPH_UTILITIES_VALIDATE_CSV = "glyph_utilities_validate_csv";
     public static final String GLYPH_UTILITIES_READ_OGG = "glyph_utilities_read_ogg";
     public static final String GLYPH_UTILITIES_OGG_EXPORT_CSV = "glyph_utilities_export_csv_from_ogg";
+    public static final String GLYPH_UTILITIES_AUTO_GENERATE = "glyph_utilities_auto_generate";
 
     public static class Device {
 
@@ -119,11 +122,16 @@ public final class Constants {
         public static final String PHONE2 = "phone2";
         public static final String PHONE2A = "phone2a";
         public static final String PHONE3A = "phone3a";
+        public static final String PHONE3APRO = "phone3apro";
 
         public static String getDevice() {
-            if (device == null)
-                device = ResourceUtils.getString("glyph_settings_device");
-
+            if (device == null) {
+                try {
+                    device = ResourceUtils.getString("glyph_settings_device");
+                } catch (Exception e) {
+                    return PHONE3A;
+                }
+            }
             return device;
         }
 
@@ -140,7 +148,8 @@ public final class Constants {
         }
 
         public static boolean isPhone3a() {
-            return getDevice().equals(PHONE3A);
+            String d = getDevice();
+            return d.equals(PHONE3A) || d.equals(PHONE3APRO);
         }
     }
     
@@ -170,31 +179,47 @@ public final class Constants {
     }
 
     public static int getBrightness() {
-        if (brightness == -1)
-            brightness = ResourceUtils.getInteger("glyph_settings_brightness_max");
-
+        if (brightness == -1) {
+            try {
+                brightness = ResourceUtils.getInteger("glyph_settings_brightness_max");
+            } catch (Exception e) {
+                brightness = 255;
+            }
+        }
         return brightness;
     }
 
     public static int getMaxBrightness() {
-        if (brightnessMax == -1)
-            brightnessMax = ResourceUtils.getInteger("glyph_settings_brightness_max");
-
+        if (brightnessMax == -1) {
+            try {
+                brightnessMax = ResourceUtils.getInteger("glyph_settings_brightness_max");
+            } catch (Exception e) {
+                brightnessMax = 255;
+            }
+        }
         return brightnessMax;
     }
 
     public static int[] getBrightnessLevels() {
-        if (brightnessLevels == null)
-            brightnessLevels = ResourceUtils.getIntArray("glyph_settings_brightness_levels");
-
+        if (brightnessLevels == null) {
+            try {
+                brightnessLevels = ResourceUtils.getIntArray("glyph_settings_brightness_levels");
+            } catch (Exception e) {
+                brightnessLevels = new int[] {31, 62, 93, 124, 155, 186, 217, 255};
+            }
+        }
         return brightnessLevels;
     }
 
     public static int[] getSupportedAnimationPatternLengths() {
-        if (supportedAnimationPatternLengths == null)
-            supportedAnimationPatternLengths = ResourceUtils.getIntArray(
-                    "glyph_settings_animations_supported_pattern_lengths");
-
+        if (supportedAnimationPatternLengths == null) {
+            try {
+                supportedAnimationPatternLengths = ResourceUtils.getIntArray(
+                        "glyph_settings_animations_supported_pattern_lengths");
+            } catch (Exception e) {
+                supportedAnimationPatternLengths = new int[] {36};
+            }
+        }
         return supportedAnimationPatternLengths;
     }
 

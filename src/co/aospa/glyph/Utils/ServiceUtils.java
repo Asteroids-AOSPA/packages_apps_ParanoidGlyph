@@ -272,8 +272,8 @@ public final class ServiceUtils {
             } else {
                 stopFlipToGlyphService();
             }
-            if (SettingsManager.isGlyphNotifsEnabled()
-                    && SettingsManager.isGlyphNotifsSyncEnabled()) {
+            if ((SettingsManager.isGlyphNotifsEnabled() && SettingsManager.isGlyphNotifsSyncEnabled())
+                    || (SettingsManager.isGlyphCallEnabled() && SettingsManager.isGlyphRingtoneSyncEnabled())) {
                 startToneHelperService();
             } else {
                 stopToneHelperService();
@@ -315,5 +315,8 @@ public final class ServiceUtils {
         stopVolumeLevelService();
         stopAutoBrightnessService();
         stopProgressService();
+        AnimationManager.stopCall();
+        AnimationManager.stopEssential();
+        AnimationManager.clearLEDs();
     }
 }
